@@ -111,15 +111,23 @@ class RadarStationMemmapDataset(Dataset):
             year_dir / radar_metadata.get("frames_file", "radar_frames.dat"),
             dtype=np.dtype(radar_metadata["dtype"]), mode="r", shape=radar_shape,
         )
-        targets = np.memmap(
-            year_dir / target_metadata["Y_file"],
-            dtype=np.dtype(target_metadata["Y_dtype"]), mode="r", shape=target_shape,
-        )
-        masks = np.memmap(
-            year_dir / target_metadata["M_file"],
-            dtype=np.dtype(target_metadata["M_dtype"]), mode="r", shape=target_shape,
-        )
-        self.year_data[year] = {"frames": frames, "targets": targets, "masks": masks}
+        if target_metadata.get("format") == "sparse":
+            sparse_path = year_dir / target_metadata["sparse_file"]
+            if not sparse_path.is_file():
+                raise FileNotFoundError(f"{year}: target esparso ausente: {sparse_path}")
+            with np.load(sparse_path) as sparse:
+                target = {name: np.asarray(sparse[name]) for name in ("frame", "row", "column", "value")}
+            if not (len(target["frame"]) == len(target["row"]) == len(target["column"]) == len(target["value"])):
+                raise ValueError(f"{year}: arrays esparsos com comprimentos diferentes.")
+            if len(target["frame"]) and (target["frame"].min() < 0 or target["frame"].max() >= radar_shape[0]
+                                       or target["row"].min() < 0 or target["row"].max() >= radar_shape[1]
+                                       or target["column"].min() < 0 or target["column"].max() >= radar_shape[2]):
+                raise ValueError(f"{year}: indices esparsos fora da grade.")
+            self.year_data[year] = {"frames": frames, "sparse": target}
+        else:
+            targets = np.memmap(year_dir / target_metadata["Y_file"], dtype=np.dtype(target_metadata["Y_dtype"]), mode="r", shape=target_shape)
+            masks = np.memmap(year_dir / target_metadata["M_file"], dtype=np.dtype(target_metadata["M_dtype"]), mode="r", shape=target_shape)
+            self.year_data[year] = {"frames": frames, "targets": targets, "masks": masks}
 
         n_possible = len(frames) - (self.t_in + self.t_out) + 1
         if n_possible <= 0:
@@ -141,8 +149,19 @@ class RadarStationMemmapDataset(Dataset):
         x_end = start + self.t_in
         y_end = x_end + self.t_out
         x = np.array(data["frames"][start:x_end], dtype=np.float32) / 255.0
-        y = np.array(data["targets"][x_end:y_end], dtype=np.float32)
-        m = np.array(data["masks"][x_end:y_end], dtype=np.float32)
+        if "sparse" in data:
+            sparse = data["sparse"]
+            left = np.searchsorted(sparse["frame"], x_end, side="left")
+            right = np.searchsorted(sparse["frame"], y_end, side="left")
+            y = np.zeros((self.t_out, x.shape[1], x.shape[2], 1), dtype=np.float32)
+            m = np.zeros_like(y)
+            frames = sparse["frame"][left:right] - x_end
+            rows, columns = sparse["row"][left:right], sparse["column"][left:right]
+            y[frames, rows, columns, 0] = sparse["value"][left:right]
+            m[frames, rows, columns, 0] = 1.0
+        else:
+            y = np.array(data["targets"][x_end:y_end], dtype=np.float32)
+            m = np.array(data["masks"][x_end:y_end], dtype=np.float32)
         return (
             torch.from_numpy(x).permute(3, 0, 1, 2),
             torch.from_numpy(y).permute(3, 0, 1, 2),
@@ -158,10 +177,17 @@ class RadarStationMemmapDataset(Dataset):
             for index, (year, start) in enumerate(self.samples):
                 data = self.year_data[year]
                 y_start = start + self.t_in
-                target = np.array(data["targets"][y_start:y_start + self.t_out])
-                mask = np.array(data["masks"][y_start:y_start + self.t_out]) > 0
-                if mask.any():
-                    maximum = np.expm1(target[mask]).max()
+                if "sparse" in data:
+                    sparse = data["sparse"]
+                    left = np.searchsorted(sparse["frame"], y_start, side="left")
+                    right = np.searchsorted(sparse["frame"], y_start + self.t_out, side="left")
+                    values = sparse["value"][left:right]
+                    maximum = np.expm1(values).max() if len(values) else None
+                else:
+                    target = np.array(data["targets"][y_start:y_start + self.t_out])
+                    mask = np.array(data["masks"][y_start:y_start + self.t_out]) > 0
+                    maximum = np.expm1(target[mask]).max() if mask.any() else None
+                if maximum is not None:
                     classes[index] = np.searchsorted(thresholds, maximum, side="right")
             self._sample_class_cache[thresholds] = classes
 
