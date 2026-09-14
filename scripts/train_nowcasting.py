@@ -162,10 +162,10 @@ def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: 
     valid = mask > 0
     error = prediction - observed
 
-    def accumulate(destination: dict, selection: torch.Tensor) -> None:
+    def accumulate(destination: dict, selection: torch.Tensor, values_source: torch.Tensor = error) -> None:
         if not selection.any():
             return
-        values = error[selection]
+        values = values_source[selection]
         destination["se"] += values.square().sum().item()
         destination["ae"] += values.abs().sum().item()
         destination["bias"] += values.sum().item()
@@ -173,7 +173,7 @@ def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: 
 
     accumulate(stats["global"], valid)
     for index, destination in enumerate(stats["horizons"]):
-        accumulate(destination, valid[:, :, index])
+        accumulate(destination, valid[:, :, index], error[:, :, index])
     for name, low, high in PRECIPITATION_BINS:
         selection = valid & (observed >= low) & (observed < high)
         accumulate(stats["intensity"][name], selection)
