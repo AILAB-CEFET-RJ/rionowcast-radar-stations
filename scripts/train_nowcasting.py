@@ -65,6 +65,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument(
+        "--log-interval", type=int, default=250,
+        help="Exibe progresso de treino a cada N batches; 0 desativa.",
+    )
     parser.add_argument("--step", type=int, default=5)
     parser.add_argument(
         "--stride", type=int, default=None,
@@ -244,13 +248,26 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     for epoch in range(1, args.epochs + 1):
         model.train()
         losses = []
-        for inputs, target, mask in train_loader:
+        epoch_started = time.monotonic()
+        total_batches = len(train_loader)
+        for batch_index, (inputs, target, mask) in enumerate(train_loader, start=1):
             inputs, target, mask = inputs.to(device), target.to(device), mask.to(device)
             optimizer.zero_grad()
             loss = criterion(model(inputs), target, mask)
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
+            if args.log_interval and (batch_index % args.log_interval == 0 or batch_index == total_batches):
+                elapsed = time.monotonic() - epoch_started
+                rate = batch_index / elapsed if elapsed else 0.0
+                remaining = (total_batches - batch_index) / rate if rate else 0.0
+                print(
+                    f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
+                    f"batch {batch_index}/{total_batches} ({100 * batch_index / total_batches:.1f}%) | "
+                    f"loss={np.mean(losses):.6f} | {rate:.2f} batch/s | "
+                    f"ETA={remaining / 60:.1f} min",
+                    flush=True,
+                )
         train_loss = float(np.mean(losses))
         val_loss, _ = evaluate(model, val_loader, criterion, device)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
@@ -290,8 +307,8 @@ def main() -> None:
     thresholds = parse_floats(args.sampler_thresholds, 3, "--sampler-thresholds")
     if (args.epochs <= 0 or args.patience <= 0 or args.batch_size <= 0
             or args.iterations <= 0 or args.step <= 0
-            or (args.stride is not None and args.stride <= 0)):
-        raise ValueError("epochs, patience, batch-size, iterations, step e stride devem ser positivos.")
+            or args.log_interval < 0 or (args.stride is not None and args.stride <= 0)):
+        raise ValueError("epochs, patience, batch-size, iterations, step e stride devem ser positivos; log-interval nao pode ser negativo.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_type = model_class(args.stconvs2s_root.resolve(), args.model)
