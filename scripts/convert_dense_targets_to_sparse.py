@@ -52,7 +52,7 @@ def main() -> None:
     sparse_file = "targets_alertario_sparse.npz"
     np.savez_compressed(args.output_year_dir / sparse_file, frame=frame, row=row, column=column, value=value)
     output = dict(metadata)
-    output.update({"format": "sparse", "shape": [n_frames, args.output_height, args.output_width, 1], "sparse_file": sparse_file, "sparse_fields": {"frame": "int32", "row": "uint16", "column": "uint16", "value": "float32"}, "observation_count": int(len(value)), "spatial_resampling": "sparse-nearest", "source_spatial_shape": [source_height, source_width]})
+    output.update({"format": "sparse", "height": args.output_height, "width": args.output_width, "shape": [n_frames, args.output_height, args.output_width, 1], "sparse_file": sparse_file, "sparse_fields": {"frame": "int32", "row": "uint16", "column": "uint16", "value": "float32"}, "observation_count": int(len(value)), "spatial_resampling": "sparse-nearest", "source_spatial_shape": [source_height, source_width]})
     output.pop("Y_file", None); output.pop("M_file", None)
     with (args.output_year_dir / args.source_metadata).open("w", encoding="utf-8") as handle:
         json.dump(output, handle, indent=2)
