@@ -266,7 +266,9 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                 print(f"Early stopping at epoch {epoch}; best epoch={best_epoch}.", flush=True)
                 break
 
-    state = torch.load(checkpoint_path, map_location=device)
+    # Checkpoints are created in this run and include trusted configuration
+    # metadata in addition to tensors; PyTorch 2.6 defaults to weights_only.
+    state = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(state["model_state_dict"])
     _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True)
     elapsed = time.monotonic() - started
