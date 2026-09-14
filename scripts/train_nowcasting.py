@@ -271,17 +271,23 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         train_loss = float(np.mean(losses))
         val_loss, _ = evaluate(model, val_loader, criterion, device)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-        print(f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
-              f"loss={train_loss:.6f} | val_loss={val_loss:.6f}", flush=True)
         if val_loss < best_val:
             best_val, best_epoch, stalled = val_loss, epoch, 0
             torch.save({"model_state_dict": model.state_dict(), "epoch": epoch,
                         "val_loss": val_loss, "configuration": vars(args)}, checkpoint_path)
+            stopping_status = f"new best | patience=0/{args.patience}"
         else:
             stalled += 1
-            if stalled >= args.patience:
-                print(f"Early stopping at epoch {epoch}; best epoch={best_epoch}.", flush=True)
-                break
+            stopping_status = (
+                f"no improvement | best={best_val:.6f} at epoch {best_epoch} | "
+                f"patience={stalled}/{args.patience}"
+            )
+        print(f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
+              f"loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
+              f"{stopping_status}", flush=True)
+        if stalled >= args.patience:
+            print(f"Early stopping at epoch {epoch}; best epoch={best_epoch}.", flush=True)
+            break
 
     # Checkpoints are created in this run and include trusted configuration
     # metadata in addition to tensors; PyTorch 2.6 defaults to weights_only.
