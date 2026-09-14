@@ -66,6 +66,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--step", type=int, default=5)
+    parser.add_argument(
+        "--stride", type=int, default=None,
+        help="Salto entre janelas do dataset; usa --step quando omitido.",
+    )
     parser.add_argument("--num-layers", type=int, default=3)
     parser.add_argument("--hidden-dim", type=int, default=32)
     parser.add_argument("--kernel-size", type=int, default=5)
@@ -282,8 +286,10 @@ def main() -> None:
     validate_splits(train_years, val_years, test_years)
     weights = parse_floats(args.loss_weights, 4, "--loss-weights")
     thresholds = parse_floats(args.sampler_thresholds, 3, "--sampler-thresholds")
-    if args.epochs <= 0 or args.patience <= 0 or args.batch_size <= 0 or args.iterations <= 0:
-        raise ValueError("epochs, patience, batch-size e iterations devem ser positivos.")
+    if (args.epochs <= 0 or args.patience <= 0 or args.batch_size <= 0
+            or args.iterations <= 0 or args.step <= 0
+            or (args.stride is not None and args.stride <= 0)):
+        raise ValueError("epochs, patience, batch-size, iterations, step e stride devem ser positivos.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_type = model_class(args.stconvs2s_root.resolve(), args.model)
@@ -291,11 +297,11 @@ def main() -> None:
     run_dir = args.output_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=False)
     datasets = (
-        RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.step,
+        RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="train"),
-        RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.step,
+        RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="val"),
-        RadarStationMemmapDataset(args.dataset_root, test_years, stride=args.step,
+        RadarStationMemmapDataset(args.dataset_root, test_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="test"),
     )
     configuration = vars(args) | {
