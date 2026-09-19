@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         default=64,
         help="Numero de instantes processados por bloco (padrao: 64).",
     )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=1000,
+        help="Intervalo, em frames, entre mensagens de progresso (padrao: 1000).",
+    )
     return parser.parse_args()
 
 
@@ -80,8 +86,13 @@ def ensure_new_path(path: Path) -> None:
         )
 
 
+def should_log_progress(start: int, stop: int, total: int, interval: int) -> bool:
+    return start == 0 or stop == total or start // interval != (stop - 1) // interval
+
+
 def downsample_radar(
-    source_dir: Path, output_dir: Path, height: int, width: int, chunk_size: int
+    source_dir: Path, output_dir: Path, height: int, width: int, chunk_size: int,
+    progress_interval: int,
 ) -> tuple[dict, tuple[int, int, int, int]]:
     metadata_path = source_dir / "metadata.json"
     metadata = read_json(metadata_path)
@@ -112,7 +123,8 @@ def downsample_radar(
     for start in range(0, n_frames, chunk_size):
         stop = min(start + chunk_size, n_frames)
         output[start:stop] = source[start:stop, row_indices][:, :, col_indices, :]
-        print(f"[radar] frames {start}:{stop}/{n_frames}", flush=True)
+        if should_log_progress(start, stop, n_frames, progress_interval):
+            print(f"[radar] frames {stop}/{n_frames}", flush=True)
 
     output.flush()
     del output
@@ -138,7 +150,7 @@ def downsample_radar(
 
 def downsample_targets(source_dir: Path, output_dir: Path, source_name: str,
                        source_radar_shape: tuple[int, int, int, int], height: int,
-                       width: int, chunk_size: int) -> None:
+                       width: int, chunk_size: int, progress_interval: int) -> None:
     y_name, m_name, metadata_name = TARGET_SOURCES[source_name]
     source_metadata_path = source_dir / metadata_name
     if not source_metadata_path.exists():
@@ -193,7 +205,8 @@ def downsample_targets(source_dir: Path, output_dir: Path, source_name: str,
             values = source_y[start:stop, :, :, 0][local_t, source_i, source_j]
             np.maximum.at(output_y, (start + local_t, target_i, target_j, 0), values)
             output_m[start + local_t, target_i, target_j, 0] = 1
-        print(f"[{source_name}] frames {start}:{stop}/{shape[0]}", flush=True)
+        if should_log_progress(start, stop, shape[0], progress_interval):
+            print(f"[{source_name}] frames {stop}/{shape[0]}", flush=True)
 
     output_y.flush()
     output_m.flush()
@@ -233,13 +246,14 @@ def process_year(args: argparse.Namespace, year: int) -> None:
 
     print(f"\n=== ANO {year} ===", flush=True)
     _, source_radar_shape = downsample_radar(
-        source_dir, output_dir, args.height, args.width, args.chunk_size
+        source_dir, output_dir, args.height, args.width, args.chunk_size,
+        args.progress_interval,
     )
     sources = TARGET_SOURCES if args.target_source == "both" else (args.target_source,)
     for source_name in sources:
         downsample_targets(
             source_dir, output_dir, source_name, source_radar_shape,
-            args.height, args.width, args.chunk_size
+            args.height, args.width, args.chunk_size, args.progress_interval,
         )
 
 
@@ -247,8 +261,8 @@ def main() -> None:
     args = parse_args()
     if args.year_start > args.year_end:
         raise ValueError("--year-start nao pode ser maior que --year-end.")
-    if args.height <= 0 or args.width <= 0 or args.chunk_size <= 0:
-        raise ValueError("--height, --width e --chunk-size devem ser positivos.")
+    if args.height <= 0 or args.width <= 0 or args.chunk_size <= 0 or args.progress_interval <= 0:
+        raise ValueError("--height, --width, --chunk-size e --progress-interval devem ser positivos.")
     if args.output_root.resolve() == args.source_root.resolve():
         raise ValueError("--output-root deve ser diferente de --source-root.")
 
