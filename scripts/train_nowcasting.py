@@ -64,6 +64,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--patience", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument(
+        "--gradient-accumulation-steps", type=int, default=1,
+        help="Numero de microbatches acumulados antes de cada optimizer.step().",
+    )
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument(
         "--log-interval", type=int, default=250,
@@ -238,6 +242,12 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     ).to(device)
     criterion = criterion_from_args(args, weights)
     optimizer = torch.optim.RMSprop(model.parameters(), lr=args.learning_rate, alpha=0.9, eps=1e-6)
+    print(
+        f"Training batches | microbatch={args.batch_size} | "
+        f"accumulation={args.gradient_accumulation_steps} | "
+        f"effective_batch={args.batch_size * args.gradient_accumulation_steps}",
+        flush=True,
+    )
     checkpoint_path = run_dir / f"iteration_{iteration + 1}_best.pt"
     history = []
     best_val = float("inf")
@@ -251,11 +261,17 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         epoch_started = time.monotonic()
         total_batches = len(train_loader)
         for batch_index, (inputs, target, mask) in enumerate(train_loader, start=1):
+            if (batch_index - 1) % args.gradient_accumulation_steps == 0:
+                optimizer.zero_grad()
+                group_size = min(
+                    args.gradient_accumulation_steps,
+                    total_batches - batch_index + 1,
+                )
             inputs, target, mask = inputs.to(device), target.to(device), mask.to(device)
-            optimizer.zero_grad()
             loss = criterion(model(inputs), target, mask)
-            loss.backward()
-            optimizer.step()
+            (loss / group_size).backward()
+            if batch_index % args.gradient_accumulation_steps == 0 or batch_index == total_batches:
+                optimizer.step()
             losses.append(loss.item())
             if args.log_interval and (batch_index % args.log_interval == 0 or batch_index == total_batches):
                 elapsed = time.monotonic() - epoch_started
@@ -313,8 +329,9 @@ def main() -> None:
     thresholds = parse_floats(args.sampler_thresholds, 3, "--sampler-thresholds")
     if (args.epochs <= 0 or args.patience <= 0 or args.batch_size <= 0
             or args.iterations <= 0 or args.step <= 0
-            or args.log_interval < 0 or (args.stride is not None and args.stride <= 0)):
-        raise ValueError("epochs, patience, batch-size, iterations, step e stride devem ser positivos; log-interval nao pode ser negativo.")
+            or args.gradient_accumulation_steps <= 0 or args.log_interval < 0
+            or (args.stride is not None and args.stride <= 0)):
+        raise ValueError("epochs, patience, batch-size, iterations, step, stride e gradient-accumulation-steps devem ser positivos; log-interval nao pode ser negativo.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_type = model_class(args.stconvs2s_root.resolve(), args.model)
