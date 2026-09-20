@@ -103,6 +103,18 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument(
+        "--pin-memory", action=argparse.BooleanOptionalAction, default=None,
+        help="Usa memoria fixada para acelerar transferencias para CUDA (padrao: ativado com CUDA).",
+    )
+    parser.add_argument(
+        "--persistent-workers", action=argparse.BooleanOptionalAction, default=False,
+        help="Mantem workers do DataLoader entre epocas; requer --workers maior que zero.",
+    )
+    parser.add_argument(
+        "--prefetch-factor", type=int, default=2,
+        help="Lotes preparados antecipadamente por worker; requer --workers maior que zero.",
+    )
+    parser.add_argument(
         "--log-interval", type=int, default=250,
         help="Exibe progresso de treino a cada N batches; 0 desativa.",
     )
@@ -245,13 +257,28 @@ def synchronize_stats(stats: dict, device: torch.device) -> None:
         value.update(se=totals[0].item(), ae=totals[1].item(), bias=totals[2].item(), n=int(totals[3].item()))
 
 
+def loader_options(args: argparse.Namespace) -> dict:
+    """Build DataLoader options valid for both single-process and DDP runs."""
+    options = {
+        "batch_size": args.batch_size,
+        "num_workers": args.workers,
+        "pin_memory": args.pin_memory,
+    }
+    if args.workers:
+        options["persistent_workers"] = args.persistent_workers
+        options["prefetch_factor"] = args.prefetch_factor
+    return options
+
+
 def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
     model.eval()
     total_loss = 0.0
     stats = None
     with torch.no_grad():
         for inputs, target, mask in loader:
-            inputs, target, mask = inputs.to(device), target.to(device), mask.to(device)
+            inputs = inputs.to(device, non_blocking=loader.pin_memory)
+            target = target.to(device, non_blocking=loader.pin_memory)
+            mask = mask.to(device, non_blocking=loader.pin_memory)
             output = model(inputs)
             total_loss += criterion(output, target, mask).item()
             if collect_metrics:
@@ -281,7 +308,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     elif args.distributed:
         sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
 
-    loader_args = {"batch_size": args.batch_size, "num_workers": args.workers}
+    loader_args = loader_options(args)
     train_loader = DataLoader(train_dataset, shuffle=sampler is None, sampler=sampler, **loader_args)
     val_loader = DataLoader(val_dataset, shuffle=False, sampler=DistributedSampler(val_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
     test_loader = DataLoader(test_dataset, shuffle=False, sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
@@ -298,7 +325,10 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if is_main(rank): print(
         f"Training batches | microbatch={args.batch_size} | "
         f"accumulation={args.gradient_accumulation_steps} | "
-        f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}",
+        f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}\n"
+        f"DataLoader | workers={args.workers} | pin_memory={args.pin_memory} | "
+        f"persistent_workers={args.persistent_workers} | "
+        f"prefetch_factor={args.prefetch_factor if args.workers else 'n/a'}",
         flush=True,
     )
     checkpoint_path = run_dir / f"iteration_{iteration + 1}_best.pt"
@@ -315,14 +345,21 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         losses = []
         epoch_started = time.monotonic()
         total_batches = len(train_loader)
-        for batch_index, (inputs, target, mask) in enumerate(train_loader, start=1):
+        data_wait_seconds = 0.0
+        train_iterator = iter(train_loader)
+        for batch_index in range(1, total_batches + 1):
+            data_started = time.monotonic()
+            inputs, target, mask = next(train_iterator)
+            data_wait_seconds += time.monotonic() - data_started
             if (batch_index - 1) % args.gradient_accumulation_steps == 0:
                 optimizer.zero_grad()
                 group_size = min(
                     args.gradient_accumulation_steps,
                     total_batches - batch_index + 1,
                 )
-            inputs, target, mask = inputs.to(device), target.to(device), mask.to(device)
+            inputs = inputs.to(device, non_blocking=args.pin_memory)
+            target = target.to(device, non_blocking=args.pin_memory)
+            mask = mask.to(device, non_blocking=args.pin_memory)
             loss = criterion(model(inputs), target, mask)
             (loss / group_size).backward()
             if batch_index % args.gradient_accumulation_steps == 0 or batch_index == total_batches:
@@ -339,9 +376,22 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                     f"ETA={remaining / 60:.1f} min",
                     flush=True,
                 )
+        # CUDA kernels are asynchronous. Synchronize once per epoch so the
+        # remainder after DataLoader wait time represents actual train work.
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        epoch_seconds = time.monotonic() - epoch_started
+        compute_seconds = max(0.0, epoch_seconds - data_wait_seconds)
         train_loss = float(np.mean(losses))
         val_loss, _ = evaluate(model, val_loader, criterion, device)
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+        history.append({
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "data_wait_seconds": data_wait_seconds,
+            "compute_seconds": compute_seconds,
+            "epoch_seconds": epoch_seconds,
+        })
         if val_loss < best_val:
             best_val, best_epoch, stalled = val_loss, epoch, 0
             if is_main(rank): torch.save({"model_state_dict": (model.module if args.distributed else model).state_dict(), "epoch": epoch,
@@ -355,7 +405,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
             )
         if is_main(rank): print(f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
               f"loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
-              f"{stopping_status}", flush=True)
+              f"{stopping_status} | data_wait={data_wait_seconds:.1f}s | "
+              f"compute={compute_seconds:.1f}s", flush=True)
         if stalled >= args.patience:
             if is_main(rank): print(f"Early stopping at epoch {epoch}; best epoch={best_epoch}.", flush=True)
             break
@@ -385,13 +436,18 @@ def main() -> None:
     validate_splits(train_years, val_years, test_years)
     weights = parse_floats(args.loss_weights, 4, "--loss-weights")
     thresholds = parse_floats(args.sampler_thresholds, 3, "--sampler-thresholds")
-    if (args.epochs <= 0 or args.patience <= 0 or args.batch_size <= 0
+    if (args.epochs <= 0 or args.patience <= 0 or args.batch_size <= 0 or args.workers < 0
             or args.iterations <= 0 or args.step <= 0
             or args.gradient_accumulation_steps <= 0 or args.log_interval < 0
+            or args.prefetch_factor <= 0
             or (args.stride is not None and args.stride <= 0)):
-        raise ValueError("epochs, patience, batch-size, iterations, step, stride e gradient-accumulation-steps devem ser positivos; log-interval nao pode ser negativo.")
+        raise ValueError("epochs, patience, batch-size, iterations, step, stride, gradient-accumulation-steps e prefetch-factor devem ser positivos; workers e log-interval nao podem ser negativos.")
+    if args.persistent_workers and not args.workers:
+        raise ValueError("--persistent-workers requer --workers maior que zero.")
 
     rank, world_size, device = distributed_context(args.distributed)
+    if args.pin_memory is None:
+        args.pin_memory = device.type == "cuda"
     model_type = model_class(args.stconvs2s_root.resolve(), args.model)
     run_name = args.run_name or datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = args.output_dir / run_name
