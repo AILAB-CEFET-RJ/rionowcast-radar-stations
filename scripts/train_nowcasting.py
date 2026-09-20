@@ -20,7 +20,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
+from torch.utils.data.distributed import DistributedSampler
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +44,36 @@ PRECIPITATION_BINS = (
     ("strong", 6.25, 12.5),
     ("extreme", 12.5, float("inf")),
 )
+
+
+class DistributedWeightedSampler(Sampler[int]):
+    """Global weighted draws, deterministically sharded across DDP ranks."""
+    def __init__(self, weights, num_samples, num_replicas, rank, seed=0):
+        self.weights = torch.as_tensor(weights, dtype=torch.double)
+        self.num_samples = num_samples
+        self.num_replicas, self.rank, self.seed, self.epoch = num_replicas, rank, seed, 0
+        self.total_size = ((num_samples + num_replicas - 1) // num_replicas) * num_replicas
+
+    def set_epoch(self, epoch): self.epoch = epoch
+    def __len__(self): return self.total_size // self.num_replicas
+    def __iter__(self):
+        generator = torch.Generator().manual_seed(self.seed + self.epoch)
+        indices = torch.multinomial(self.weights, self.total_size, replacement=True, generator=generator)
+        return iter(indices[self.rank:self.total_size:self.num_replicas].tolist())
+
+
+def distributed_context(enabled: bool):
+    if not enabled:
+        return 0, 1, torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dist.init_process_group(backend="nccl")
+    rank, world_size = dist.get_rank(), dist.get_world_size()
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    return rank, world_size, torch.device("cuda", local_rank)
+
+
+def is_main(rank: int) -> bool:
+    return rank == 0
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -91,6 +124,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--cuda", default="0")
+    parser.add_argument("--distributed", action="store_true", help="Usa DDP; iniciar com torchrun.")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs" / "experiments")
     parser.add_argument("--run-name", default=None)
     return parser.parse_args()
@@ -201,6 +235,16 @@ def finalized_stats(stats: dict) -> dict:
     }
 
 
+def synchronize_stats(stats: dict, device: torch.device) -> None:
+    if not dist.is_initialized() or stats is None:
+        return
+    leaves = [stats["global"], *stats["horizons"], *stats["intensity"].values()]
+    for value in leaves:
+        totals = torch.tensor([value["se"], value["ae"], value["bias"], value["n"]], device=device)
+        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+        value.update(se=totals[0].item(), ae=totals[1].item(), bias=totals[2].item(), n=int(totals[3].item()))
+
+
 def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
     model.eval()
     total_loss = 0.0
@@ -216,33 +260,42 @@ def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
                 update_stats(stats, output, target, mask)
     if not len(loader):
         raise ValueError("DataLoader vazio.")
-    return total_loss / len(loader), finalized_stats(stats) if stats else None
+    loss_parts = torch.tensor([total_loss, len(loader)], device=device)
+    if dist.is_initialized():
+        dist.all_reduce(loss_parts, op=dist.ReduceOp.SUM)
+    synchronize_stats(stats, device)
+    return (loss_parts[0] / loss_parts[1]).item(), finalized_stats(stats) if stats else None
 
 
 def train_one_iteration(args, model_type, device, datasets, run_dir: Path, iteration: int,
-                        weights: tuple[float, ...], thresholds: tuple[float, ...]) -> dict:
-    seed = args.seed + iteration * 10
+                        weights: tuple[float, ...], thresholds: tuple[float, ...], rank=0, world_size=1) -> dict:
+    seed = args.seed + iteration * 10 + rank
     set_seed(seed)
     train_dataset, val_dataset, test_dataset = datasets
     sampler = None
     if args.balanced_sampler:
         sample_weights, counts = train_dataset.get_balanced_sample_weights(thresholds)
-        sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
-        print(f"Balanced sampler | class_counts={counts.tolist()}", flush=True)
+        sampler = (DistributedWeightedSampler(sample_weights, len(sample_weights), world_size, rank, args.seed + iteration * 10)
+                   if args.distributed else WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True))
+        if is_main(rank): print(f"Balanced sampler | class_counts={counts.tolist()}", flush=True)
+    elif args.distributed:
+        sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
 
     loader_args = {"batch_size": args.batch_size, "num_workers": args.workers}
     train_loader = DataLoader(train_dataset, shuffle=sampler is None, sampler=sampler, **loader_args)
-    val_loader = DataLoader(val_dataset, shuffle=False, **loader_args)
-    test_loader = DataLoader(test_dataset, shuffle=False, **loader_args)
+    val_loader = DataLoader(val_dataset, shuffle=False, sampler=DistributedSampler(val_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
+    test_loader = DataLoader(test_dataset, shuffle=False, sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
 
     sample_x, sample_y, _ = train_dataset[0]
     model = model_type(
         (1, *sample_x.shape), args.num_layers, args.hidden_dim, args.kernel_size,
         device, 0.0, args.step, output_channels=sample_y.shape[0],
     ).to(device)
+    if args.distributed:
+        model = DistributedDataParallel(model, device_ids=[device.index])
     criterion = criterion_from_args(args, weights)
     optimizer = torch.optim.RMSprop(model.parameters(), lr=args.learning_rate, alpha=0.9, eps=1e-6)
-    print(
+    if is_main(rank): print(
         f"Training batches | microbatch={args.batch_size} | "
         f"accumulation={args.gradient_accumulation_steps} | "
         f"effective_batch={args.batch_size * args.gradient_accumulation_steps}",
@@ -256,6 +309,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     started = time.monotonic()
 
     for epoch in range(1, args.epochs + 1):
+        if hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(epoch)
         model.train()
         losses = []
         epoch_started = time.monotonic()
@@ -277,7 +332,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                 elapsed = time.monotonic() - epoch_started
                 rate = batch_index / elapsed if elapsed else 0.0
                 remaining = (total_batches - batch_index) / rate if rate else 0.0
-                print(
+                if is_main(rank): print(
                     f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
                     f"batch {batch_index}/{total_batches} ({100 * batch_index / total_batches:.1f}%) | "
                     f"loss={np.mean(losses):.6f} | {rate:.2f} batch/s | "
@@ -289,7 +344,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
         if val_loss < best_val:
             best_val, best_epoch, stalled = val_loss, epoch, 0
-            torch.save({"model_state_dict": model.state_dict(), "epoch": epoch,
+            if is_main(rank): torch.save({"model_state_dict": (model.module if args.distributed else model).state_dict(), "epoch": epoch,
                         "val_loss": val_loss, "configuration": vars(args)}, checkpoint_path)
             stopping_status = f"new best | patience=0/{args.patience}"
         else:
@@ -298,31 +353,34 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                 f"no improvement | best={best_val:.6f} at epoch {best_epoch} | "
                 f"patience={stalled}/{args.patience}"
             )
-        print(f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
+        if is_main(rank): print(f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
               f"loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
               f"{stopping_status}", flush=True)
         if stalled >= args.patience:
-            print(f"Early stopping at epoch {epoch}; best epoch={best_epoch}.", flush=True)
+            if is_main(rank): print(f"Early stopping at epoch {epoch}; best epoch={best_epoch}.", flush=True)
             break
 
     # Checkpoints are created in this run and include trusted configuration
     # metadata in addition to tensors; PyTorch 2.6 defaults to weights_only.
+    if args.distributed: dist.barrier()
     state = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(state["model_state_dict"])
+    (model.module if args.distributed else model).load_state_dict(state["model_state_dict"])
     _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True)
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": checkpoint_path.name,
               "test_metrics": metrics, "history": history}
-    with (run_dir / f"iteration_{iteration + 1}.json").open("w", encoding="utf-8") as file:
-        json.dump(result, file, indent=2)
-    print(f"Iteration {iteration + 1} complete | test={metrics['global']}", flush=True)
+    if is_main(rank):
+        with (run_dir / f"iteration_{iteration + 1}.json").open("w", encoding="utf-8") as file:
+            json.dump(result, file, indent=2)
+        print(f"Iteration {iteration + 1} complete | test={metrics['global']}", flush=True)
     return result
 
 
 def main() -> None:
     args = parse_arguments()
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda)
+    if not args.distributed:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda)
     train_years, val_years, test_years = map(parse_years, (args.train_years, args.val_years, args.test_years))
     validate_splits(train_years, val_years, test_years)
     weights = parse_floats(args.loss_weights, 4, "--loss-weights")
@@ -333,11 +391,14 @@ def main() -> None:
             or (args.stride is not None and args.stride <= 0)):
         raise ValueError("epochs, patience, batch-size, iterations, step, stride e gradient-accumulation-steps devem ser positivos; log-interval nao pode ser negativo.")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    rank, world_size, device = distributed_context(args.distributed)
     model_type = model_class(args.stconvs2s_root.resolve(), args.model)
     run_name = args.run_name or datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = args.output_dir / run_name
-    run_dir.mkdir(parents=True, exist_ok=False)
+    if is_main(rank):
+        run_dir.mkdir(parents=True, exist_ok=False)
+    if args.distributed:
+        dist.barrier()
     datasets = (
         RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="train"),
@@ -351,13 +412,18 @@ def main() -> None:
         "test_years": test_years, "stconvs2s_commit": core_commit(args.stconvs2s_root),
     }
     configuration = {key: str(value) if isinstance(value, Path) else value for key, value in configuration.items()}
-    with (run_dir / "configuration.json").open("w", encoding="utf-8") as file:
-        json.dump(configuration, file, indent=2)
-    results = [train_one_iteration(args, model_type, device, datasets, run_dir, index, weights, thresholds)
+    configuration["world_size"] = world_size
+    if is_main(rank):
+        with (run_dir / "configuration.json").open("w", encoding="utf-8") as file:
+            json.dump(configuration, file, indent=2)
+    results = [train_one_iteration(args, model_type, device, datasets, run_dir, index, weights, thresholds, rank, world_size)
                for index in range(args.iterations)]
     summary = {"iterations": len(results), "results": results}
-    with (run_dir / "summary.json").open("w", encoding="utf-8") as file:
-        json.dump(summary, file, indent=2)
+    if is_main(rank):
+        with (run_dir / "summary.json").open("w", encoding="utf-8") as file:
+            json.dump(summary, file, indent=2)
+    if args.distributed:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
