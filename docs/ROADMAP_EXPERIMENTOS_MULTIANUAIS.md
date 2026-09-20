@@ -21,7 +21,7 @@ treino, validação e teste.
   2012-2024.
 - [x] Loader compatível com `targets_alertario_sparse.npz` e com o formato
   denso legado.
-- [ ] Primeiro experimento com split temporal multianual.
+- [x] Primeiro experimento com split temporal multianual concluído (M1).
 
 ## Protocolo Inicial
 
@@ -46,8 +46,8 @@ estações. O runner rejeita anos repetidos entre splits.
 - [x] Remover os temporários densos `256 x 256` após a conversão anual.
 - [x] Validar a estrutura esparsa em 2012: 1.093.997 observações, índices
   temporais e espaciais dentro dos limites da grade.
-- [ ] Registrar, para todos os splits, contagem de observações e distribuição
-  por faixa de intensidade.
+- [x] Auditar a distribuição por faixa no conjunto de treino.
+- [ ] Registrar a distribuição por faixa também em validação e teste.
 
 O formato esparso elimina os memmaps densos `Y_alertario.dat` e
 `M_alertario.dat` do dataset final. O loader reconstrói somente a janela alvo
@@ -61,20 +61,42 @@ disco sem alterar a arquitetura STConvS2S.
 - [x] Restringir o sampler balanceado ao treino.
 - [x] Registrar configuração, commit do core, checkpoints, histórico e métricas.
 - [x] Smoke test do loader esparso para 2012.
-- [ ] Executar o smoke test ponta a ponta no ambiente `ailab` da
-  `workstation02`, usando os três splits temporais.
+- [x] Smoke test ponta a ponta com os três splits temporais, incluindo treino,
+  validação, checkpoint, recarga e teste.
+- [x] Adicionar `--gradient-accumulation-steps` para simular batch efetivo
+  maior em GPUs com VRAM limitada.
+- [ ] Registrar no log a distribuição efetivamente sorteada pelo sampler em
+  cada época.
 
 ### Matriz Experimental
 
-| ID | Loss | Sampler | Repetições iniciais |
+| ID | Loss | Sampler | Repetições iniciais | Estado |
 |---|---|---|---:|
-| M1 | `masked-mae` | não | 1 |
-| M2 | `masked-huber` | não | 1 |
-| M3 | `weighted-huber` | não | 1 |
-| M4 | `weighted-huber` | sim | 1 |
+| M1 | `masked-mae` | não | 1 | Concluído |
+| M2 | `masked-huber` | não | 1 | Interrompido por congelamento da Skat; reiniciar na Arietis |
+| M3 | `weighted-huber` | não | 1 | Pendente |
+| M4 | `weighted-huber` | balanceado | 1 | Pendente |
 
 As configurações finalistas devem ser repetidas com 2 ou 3 seeds. Métricas
 globais devem ser complementadas por resultados por horizonte e intensidade.
+
+### Auditoria do Sampler
+
+No split de treino (2012-2021, `stride=5`), há 59.897 janelas:
+
+| Faixa | Janelas | Proporção |
+|---|---:|---:|
+| Fraca/sem chuva | 54.075 | 90,28% |
+| Moderada | 4.375 | 7,30% |
+| Forte | 934 | 1,56% |
+| Extrema | 513 | 0,86% |
+
+Uma janela extrema é uma sequência distinta `(ano, índice inicial)` cujo
+máximo observado nos cinco horizontes futuros é pelo menos `12,5 mm/15 min`.
+O sampler balanceado atual equaliza as quatro classes em expectativa e, por
+isso, repetiria cada uma das 513 janelas extremas cerca de 29 vezes por época.
+M4 deve ser interpretado como experimento exploratório; após sua avaliação,
+testar um sampler de probabilidades moderadas para reduzir essa repetição.
 
 ## Registro
 
@@ -87,3 +109,7 @@ globais devem ser complementadas por resultados por horizonte e intensidade.
 | 2026-09-13 | Radar 128x128 para 2012-2024 | Concluído | Frames anuais gerados diretamente dos PNGs. |
 | 2026-09-14 | Targets AlertaRio esparsos 128x128 | Concluído | `targets_alertario_sparse.npz` gerado para 2012-2024; dataset final ocupa 18 GiB. |
 | 2026-09-14 | Smoke do loader esparso em 2012 | Concluído | 6.837 janelas; sampler: 6.314/398/90/35 por faixa. |
+| 2026-09-19 | M1 multianual na Skat | Concluído | Early stopping na época 28; melhor época 18; teste: RMSE 0,5396, MAE 0,06382, Bias -0,06099. |
+| 2026-09-19 | M2 multianual na Skat | Interrompido | Congelamento da máquina durante o experimento. |
+| 2026-09-20 | Dataset esparso na Arietis | Concluído | Dataset 128x128 reconstruído e validado para 2012-2024, com 18 GiB. |
+| 2026-09-20 | Auditoria do treino | Concluído | 513 janelas extremas, equivalentes a 0,8565% das 59.897 janelas. |
