@@ -65,11 +65,11 @@ class DistributedWeightedSampler(Sampler[int]):
 def distributed_context(enabled: bool):
     if not enabled:
         return 0, 1, torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dist.init_process_group(backend="nccl")
-    rank, world_size = dist.get_rank(), dist.get_world_size()
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
-    return rank, world_size, torch.device("cuda", local_rank)
+    device = torch.device("cuda", local_rank)
+    dist.init_process_group(backend="nccl", device_id=device)
+    return dist.get_rank(), dist.get_world_size(), device
 
 
 def is_main(rank: int) -> bool:
@@ -298,7 +298,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if is_main(rank): print(
         f"Training batches | microbatch={args.batch_size} | "
         f"accumulation={args.gradient_accumulation_steps} | "
-        f"effective_batch={args.batch_size * args.gradient_accumulation_steps}",
+        f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}",
         flush=True,
     )
     checkpoint_path = run_dir / f"iteration_{iteration + 1}_best.pt"
