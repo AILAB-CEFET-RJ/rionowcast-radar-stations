@@ -1,0 +1,3 @@
+[submodule "external/stconvs2s"]
+	path = external/stconvs2s
+	url = https://github.com/AILAB-CEFET-RJ/stconvs2s.git
