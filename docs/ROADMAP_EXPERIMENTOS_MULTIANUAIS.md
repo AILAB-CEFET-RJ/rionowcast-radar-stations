@@ -65,6 +65,8 @@ disco sem alterar a arquitetura STConvS2S.
   validação, checkpoint, recarga e teste.
 - [x] Adicionar `--gradient-accumulation-steps` para simular batch efetivo
   maior em GPUs com VRAM limitada.
+- [x] Implementar retomada V1 entre épocas, com checkpoint atômico do último
+  estado, otimizador, early stopping, histórico e estados aleatórios.
 - [ ] Registrar no log a distribuição efetivamente sorteada pelo sampler em
   cada época.
 
@@ -113,3 +115,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-19 | M2 multianual na Skat | Interrompido | Congelamento da máquina durante o experimento. |
 | 2026-09-20 | Dataset esparso na Arietis | Concluído | Dataset 128x128 reconstruído e validado para 2012-2024, com 18 GiB. |
 | 2026-09-20 | Auditoria do treino | Concluído | 513 janelas extremas, equivalentes a 0,8565% das 59.897 janelas. |
+| 2026-09-21 | Retomada V1 | Concluído | `iteration_1_last.pt` permite retomar na próxima época após interrupção; validada por testes unitários. |

@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import random
+import signal
 import subprocess
 import sys
 import time
@@ -44,6 +45,25 @@ PRECIPITATION_BINS = (
     ("strong", 6.25, 12.5),
     ("extreme", 12.5, float("inf")),
 )
+
+CHECKPOINT_VERSION = 1
+RESUME_CONFIG_KEYS = (
+    "dataset_root", "model", "num_layers", "hidden_dim", "kernel_size", "step", "stride",
+    "target_source", "loss", "huber_delta", "loss_weights", "sampler_thresholds",
+    "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
+    "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
+    "stconvs2s_commit",
+)
+
+
+class StopRequested:
+    """Defers SIGINT/SIGTERM handling until the current batch completes."""
+    def __init__(self):
+        self.requested = False
+
+    def __call__(self, signum, _frame):
+        self.requested = True
+        print(f"Received signal {signum}; stopping after the current batch.", flush=True)
 
 
 class DistributedWeightedSampler(Sampler[int]):
@@ -139,6 +159,14 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--distributed", action="store_true", help="Usa DDP; iniciar com torchrun.")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs" / "experiments")
     parser.add_argument("--run-name", default=None)
+    parser.add_argument(
+        "--resume", type=Path,
+        help="Checkpoint iteration_N_last.pt para retomar a partir da proxima epoca.",
+    )
+    parser.add_argument(
+        "--checkpoint-every", type=int, default=1,
+        help="Salva iteration_N_last.pt a cada N epocas concluidas.",
+    )
     return parser.parse_args()
 
 
@@ -181,6 +209,76 @@ def core_commit(path: Path) -> str | None:
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
+
+
+def capture_rng_state() -> dict:
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda"] = torch.cuda.get_rng_state()
+    return state
+
+
+def restore_rng_state(state: dict) -> None:
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if "torch_cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state(state["torch_cuda"])
+
+
+def atomic_torch_save(state: dict, path: Path) -> None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(state, temporary_path)
+    os.replace(temporary_path, path)
+
+
+def checkpoint_state(model, optimizer, iteration: int, completed_epoch: int, best_val: float,
+                     best_epoch: int, stalled: int, history: list, configuration: dict,
+                     rng_states: list[dict]) -> dict:
+    base_model = model.module if isinstance(model, DistributedDataParallel) else model
+    return {
+        "checkpoint_version": CHECKPOINT_VERSION,
+        "model_state_dict": base_model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "iteration": iteration,
+        "completed_epoch": completed_epoch,
+        "best_val_loss": best_val,
+        "best_epoch": best_epoch,
+        "stalled_epochs": stalled,
+        "history": history,
+        "configuration": configuration,
+        "rng_states": rng_states,
+    }
+
+
+def collect_rng_states(local_state: dict) -> list[dict]:
+    if not dist.is_initialized():
+        return [local_state]
+    states = [None] * dist.get_world_size()
+    dist.all_gather_object(states, local_state)
+    return states
+
+
+def validate_resume_checkpoint(state: dict, configuration: dict, world_size: int) -> None:
+    if state.get("checkpoint_version") != CHECKPOINT_VERSION:
+        raise ValueError("Versao de checkpoint incompativel para retomada.")
+    saved = state.get("configuration", {})
+    differences = [
+        f"{key}: salvo={saved.get(key)!r}, atual={configuration.get(key)!r}"
+        for key in RESUME_CONFIG_KEYS
+        if saved.get(key) != configuration.get(key)
+    ]
+    if differences:
+        raise ValueError("Checkpoint incompativel com a configuracao atual: " + "; ".join(differences))
+    rng_states = state.get("rng_states", [])
+    if len(rng_states) != world_size:
+        raise ValueError(
+            f"Checkpoint foi criado com {len(rng_states)} rank(s), mas a execucao atual usa {world_size}."
+        )
 
 
 def model_class(core_root: Path, model_name: str):
@@ -295,9 +393,11 @@ def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
 
 
 def train_one_iteration(args, model_type, device, datasets, run_dir: Path, iteration: int,
-                        weights: tuple[float, ...], thresholds: tuple[float, ...], rank=0, world_size=1) -> dict:
+                        weights: tuple[float, ...], thresholds: tuple[float, ...], configuration: dict,
+                        resume_state: dict | None = None, rank=0, world_size=1) -> dict:
     seed = args.seed + iteration * 10 + rank
-    set_seed(seed)
+    if resume_state is None:
+        set_seed(seed)
     train_dataset, val_dataset, test_dataset = datasets
     sampler = None
     if args.balanced_sampler:
@@ -331,14 +431,35 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         f"prefetch_factor={args.prefetch_factor if args.workers else 'n/a'}",
         flush=True,
     )
-    checkpoint_path = run_dir / f"iteration_{iteration + 1}_best.pt"
+    best_checkpoint_path = run_dir / f"iteration_{iteration + 1}_best.pt"
+    last_checkpoint_path = run_dir / f"iteration_{iteration + 1}_last.pt"
     history = []
     best_val = float("inf")
     best_epoch = 0
     stalled = 0
+    start_epoch = 1
+    if resume_state is not None:
+        base_model = model.module if args.distributed else model
+        base_model.load_state_dict(resume_state["model_state_dict"])
+        optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        restore_rng_state(resume_state["rng_states"][rank])
+        history = resume_state["history"]
+        best_val = resume_state["best_val_loss"]
+        best_epoch = resume_state["best_epoch"]
+        stalled = resume_state["stalled_epochs"]
+        start_epoch = resume_state["completed_epoch"] + 1
+        if is_main(rank): print(
+            f"Resuming iteration {iteration + 1} from epoch {start_epoch}; "
+            f"best={best_val:.6f} at epoch {best_epoch} | patience={stalled}/{args.patience}",
+            flush=True,
+        )
     started = time.monotonic()
+    stop_requested = StopRequested()
+    previous_sigint = signal.signal(signal.SIGINT, stop_requested)
+    previous_sigterm = signal.signal(signal.SIGTERM, stop_requested)
+    interrupted = False
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         if hasattr(sampler, "set_epoch"):
             sampler.set_epoch(epoch)
         model.train()
@@ -376,6 +497,18 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                     f"ETA={remaining / 60:.1f} min",
                     flush=True,
                 )
+            stop_flag = torch.tensor(int(stop_requested.requested), device=device)
+            if dist.is_initialized():
+                dist.all_reduce(stop_flag, op=dist.ReduceOp.MAX)
+            if stop_flag.item():
+                interrupted = True
+                break
+        if interrupted:
+            if is_main(rank): print(
+                f"Interrupted during epoch {epoch}; last completed checkpoint remains "
+                f"{last_checkpoint_path.name}.", flush=True,
+            )
+            break
         # CUDA kernels are asynchronous. Synchronize once per epoch so the
         # remainder after DataLoader wait time represents actual train work.
         if device.type == "cuda":
@@ -392,10 +525,9 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
             "compute_seconds": compute_seconds,
             "epoch_seconds": epoch_seconds,
         })
-        if val_loss < best_val:
+        is_new_best = val_loss < best_val
+        if is_new_best:
             best_val, best_epoch, stalled = val_loss, epoch, 0
-            if is_main(rank): torch.save({"model_state_dict": (model.module if args.distributed else model).state_dict(), "epoch": epoch,
-                        "val_loss": val_loss, "configuration": vars(args)}, checkpoint_path)
             stopping_status = f"new best | patience=0/{args.patience}"
         else:
             stalled += 1
@@ -407,19 +539,37 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
               f"loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
               f"{stopping_status} | data_wait={data_wait_seconds:.1f}s | "
               f"compute={compute_seconds:.1f}s", flush=True)
+        rng_states = collect_rng_states(capture_rng_state())
+        state = checkpoint_state(model, optimizer, iteration, epoch, best_val, best_epoch, stalled,
+                                 history, configuration, rng_states)
+        if is_main(rank):
+            if is_new_best:
+                atomic_torch_save(state, best_checkpoint_path)
+            if epoch % args.checkpoint_every == 0 or epoch == args.epochs or stalled >= args.patience:
+                atomic_torch_save(state, last_checkpoint_path)
         if stalled >= args.patience:
             if is_main(rank): print(f"Early stopping at epoch {epoch}; best epoch={best_epoch}.", flush=True)
             break
 
+    signal.signal(signal.SIGINT, previous_sigint)
+    signal.signal(signal.SIGTERM, previous_sigterm)
+
+    if interrupted:
+        return {
+            "seed": seed, "interrupted": True, "last_completed_epoch": start_epoch - 1 if not history else history[-1]["epoch"],
+            "checkpoint": last_checkpoint_path.name if last_checkpoint_path.exists() else None,
+            "history": history,
+        }
+
     # Checkpoints are created in this run and include trusted configuration
     # metadata in addition to tensors; PyTorch 2.6 defaults to weights_only.
     if args.distributed: dist.barrier()
-    state = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    state = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
     (model.module if args.distributed else model).load_state_dict(state["model_state_dict"])
     _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True)
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
-              "elapsed_seconds": elapsed, "checkpoint": checkpoint_path.name,
+              "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
               "test_metrics": metrics, "history": history}
     if is_main(rank):
         with (run_dir / f"iteration_{iteration + 1}.json").open("w", encoding="utf-8") as file:
@@ -439,9 +589,9 @@ def main() -> None:
     if (args.epochs <= 0 or args.patience <= 0 or args.batch_size <= 0 or args.workers < 0
             or args.iterations <= 0 or args.step <= 0
             or args.gradient_accumulation_steps <= 0 or args.log_interval < 0
-            or args.prefetch_factor <= 0
+            or args.prefetch_factor <= 0 or args.checkpoint_every <= 0
             or (args.stride is not None and args.stride <= 0)):
-        raise ValueError("epochs, patience, batch-size, iterations, step, stride, gradient-accumulation-steps e prefetch-factor devem ser positivos; workers e log-interval nao podem ser negativos.")
+        raise ValueError("epochs, patience, batch-size, iterations, step, stride, gradient-accumulation-steps, prefetch-factor e checkpoint-every devem ser positivos; workers e log-interval nao podem ser negativos.")
     if args.persistent_workers and not args.workers:
         raise ValueError("--persistent-workers requer --workers maior que zero.")
 
@@ -449,10 +599,33 @@ def main() -> None:
     if args.pin_memory is None:
         args.pin_memory = device.type == "cuda"
     model_type = model_class(args.stconvs2s_root.resolve(), args.model)
-    run_name = args.run_name or datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = args.output_dir / run_name
-    if is_main(rank):
-        run_dir.mkdir(parents=True, exist_ok=False)
+    configuration = vars(args) | {
+        "device": str(device), "train_years": train_years, "val_years": val_years,
+        "test_years": test_years, "stconvs2s_commit": core_commit(args.stconvs2s_root),
+    }
+    configuration = {key: str(value) if isinstance(value, Path) else value for key, value in configuration.items()}
+    configuration["world_size"] = world_size
+    resume_state = None
+    if args.resume:
+        if args.iterations != 1:
+            raise ValueError("--resume suporta apenas --iterations 1 na versao atual.")
+        resume_path = args.resume.resolve()
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"Checkpoint de retomada nao encontrado: {resume_path}")
+        run_dir = resume_path.parent
+        if args.run_name and args.run_name != run_dir.name:
+            raise ValueError("--run-name deve corresponder ao diretorio do checkpoint ao usar --resume.")
+        resume_state = torch.load(resume_path, map_location="cpu", weights_only=False)
+        validate_resume_checkpoint(resume_state, configuration, world_size)
+        if resume_state.get("iteration") != 0:
+            raise ValueError("--resume suporta somente checkpoints da primeira iteracao na versao atual.")
+        if is_main(rank):
+            print(f"Resuming from checkpoint: {resume_path}", flush=True)
+    else:
+        run_name = args.run_name or datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_dir = args.output_dir / run_name
+        if is_main(rank):
+            run_dir.mkdir(parents=True, exist_ok=False)
     if args.distributed:
         dist.barrier()
     datasets = (
@@ -463,16 +636,11 @@ def main() -> None:
         RadarStationMemmapDataset(args.dataset_root, test_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="test"),
     )
-    configuration = vars(args) | {
-        "device": str(device), "train_years": train_years, "val_years": val_years,
-        "test_years": test_years, "stconvs2s_commit": core_commit(args.stconvs2s_root),
-    }
-    configuration = {key: str(value) if isinstance(value, Path) else value for key, value in configuration.items()}
-    configuration["world_size"] = world_size
-    if is_main(rank):
+    if is_main(rank) and resume_state is None:
         with (run_dir / "configuration.json").open("w", encoding="utf-8") as file:
             json.dump(configuration, file, indent=2)
-    results = [train_one_iteration(args, model_type, device, datasets, run_dir, index, weights, thresholds, rank, world_size)
+    results = [train_one_iteration(args, model_type, device, datasets, run_dir, index, weights, thresholds,
+                                   configuration, resume_state, rank, world_size)
                for index in range(args.iterations)]
     summary = {"iterations": len(results), "results": results}
     if is_main(rank):

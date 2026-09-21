@@ -165,7 +165,42 @@ Para verificar se ainda está rodando:
 pgrep -af "main.py"
 ```
 
-## 5. Saídas
+## 5. Retomar treinamento interrompido
+
+Ao fim de cada época, o runner grava
+`outputs/experiments/<run-name>/iteration_1_last.pt` de forma atômica. O
+checkpoint preserva pesos, estado do otimizador RMSprop, melhor época,
+contador do early stopping, histórico e estados aleatórios. Assim, uma
+interrupção por limite do agendador ou reinicialização da máquina pode ser
+retomada na época seguinte, sem reiniciar o experimento.
+
+Use o mesmo dataset, split, arquitetura, loss, batch efetivo, seed e modo de
+execução (uma GPU ou DDP) do experimento original. É permitido aumentar
+`--epochs`, ajustar `--patience` e alterar opções operacionais como
+`--workers` e `--log-interval`.
+
+```bash
+python -u scripts/train_nowcasting.py \
+  --dataset-root data/datasets/radar_sumare_2012_2024_15min_128_sparse \
+  --train-years 2012-2021 \
+  --val-years 2022 \
+  --test-years 2023-2024 \
+  --target-source alertario \
+  --model stconvs2s-c \
+  --batch-size 2 \
+  --gradient-accumulation-steps 1 \
+  --epochs 60 \
+  --patience 10 \
+  --loss masked-huber \
+  --resume outputs/experiments/ml-huber-m2/iteration_1_last.pt
+```
+
+Use `--checkpoint-every N` para reduzir a frequência dos checkpoints; o padrão
+é `1`. A retomada V1 ocorre somente entre épocas concluídas. Um `SIGTERM` ou
+`SIGINT` encerra o processo após o batch corrente e preserva o último
+checkpoint já concluído.
+
+## 6. Saídas
 
 Os checkpoints são salvos automaticamente em uma estrutura semelhante a:
 
