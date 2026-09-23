@@ -82,9 +82,12 @@ def persistence(inputs: torch.Tensor, t_out: int) -> torch.Tensor:
     return last_values.unsqueeze(1).expand(-1, t_out, -1)
 
 
-def empty_stats(horizons: int) -> dict:
+def empty_stats(horizons: int, station_ids: list[int]) -> dict:
     return {"global": [0.0, 0.0, 0.0, 0], "horizons": [[0.0, 0.0, 0.0, 0] for _ in range(horizons)],
-            "intensity": {name: [0.0, 0.0, 0.0, 0] for name, _, _ in BINS}}
+            "intensity": {name: [0.0, 0.0, 0.0, 0] for name, _, _ in BINS},
+            "stations": {str(station_id): {"global": [0.0, 0.0, 0.0, 0],
+                                             "horizons": [[0.0, 0.0, 0.0, 0] for _ in range(horizons)]}
+                         for station_id in station_ids}}
 
 
 def add_stats(destination: list, errors: torch.Tensor) -> None:
@@ -95,7 +98,8 @@ def add_stats(destination: list, errors: torch.Tensor) -> None:
         destination[3] += errors.numel()
 
 
-def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> None:
+def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor,
+                 station_ids: list[int]) -> None:
     predicted, observed = torch.clamp(torch.expm1(output), min=0.0), torch.expm1(target)
     valid, error = mask > 0, predicted - observed
     add_stats(stats["global"], error[valid])
@@ -104,6 +108,11 @@ def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: 
     for name, low, high in BINS:
         selection = valid & (observed >= low) & (observed < high)
         add_stats(stats["intensity"][name], error[selection])
+    for index, station_id in enumerate(station_ids):
+        station = stats["stations"][str(station_id)]
+        add_stats(station["global"], error[:, :, index][valid[:, :, index]])
+        for horizon, destination in enumerate(station["horizons"]):
+            add_stats(destination, error[:, horizon, index][valid[:, horizon, index]])
 
 
 def finalize(item: list) -> dict:
@@ -111,7 +120,7 @@ def finalize(item: list) -> dict:
     return {"n": n, "rmse": (se / n) ** 0.5 if n else None, "mae": ae / n if n else None, "bias": bias / n if n else None}
 
 
-def evaluate(model, loader, loss_fn, device: torch.device, *, use_persistence: bool = False) -> tuple[float, dict]:
+def evaluate(model, loader, loss_fn, device: torch.device, station_ids: list[int], *, use_persistence: bool = False) -> tuple[float, dict]:
     if model is not None:
         model.eval()
     total_loss, stats = 0.0, None
@@ -120,10 +129,13 @@ def evaluate(model, loader, loss_fn, device: torch.device, *, use_persistence: b
             inputs, target, mask = inputs.to(device), target.to(device), mask.to(device)
             output = persistence(inputs, target.shape[1]) if use_persistence else model(inputs)
             total_loss += loss_fn(loss_input(output), loss_input(target), loss_input(mask)).item()
-            stats = stats or empty_stats(target.shape[1])
-            update_stats(stats, output, target, mask)
+            stats = stats or empty_stats(target.shape[1], station_ids)
+            update_stats(stats, output, target, mask, station_ids)
     return total_loss / len(loader), {"global": finalize(stats["global"]), "horizons": [finalize(item) for item in stats["horizons"]],
-                                       "intensity": {name: finalize(item) for name, item in stats["intensity"].items()}}
+                                       "intensity": {name: finalize(item) for name, item in stats["intensity"].items()},
+                                       "stations": {station_id: {"global": finalize(values["global"]),
+                                                                  "horizons": [finalize(item) for item in values["horizons"]]}
+                                                    for station_id, values in stats["stations"].items()}}
 
 
 def main() -> None:
@@ -154,7 +166,7 @@ def main() -> None:
     (run_dir / "configuration.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     loss_fn = criterion(args, weights)
     if args.model == "persistence":
-        _, metrics = evaluate(None, loaders[2], loss_fn, device, use_persistence=True)
+        _, metrics = evaluate(None, loaders[2], loss_fn, device, test.station_ids, use_persistence=True)
         result = {"model": "persistence", "test_metrics": metrics}
     else:
         model = StationMLP(len(train.station_ids), hidden_dim=args.hidden_dim).to(device)
@@ -166,7 +178,7 @@ def main() -> None:
                 optimizer.zero_grad(); output = model(inputs)
                 current_loss = loss_fn(loss_input(output), loss_input(target), loss_input(mask))
                 current_loss.backward(); optimizer.step(); total_loss += current_loss.item()
-            val_loss, _ = evaluate(model, loaders[1], loss_fn, device)
+            val_loss, _ = evaluate(model, loaders[1], loss_fn, device, val.station_ids)
             history.append({"epoch": epoch, "loss": total_loss / len(loaders[0]), "val_loss": val_loss})
             if val_loss < best_val:
                 best_val, best_state, stalled = val_loss, {key: value.detach().cpu() for key, value in model.state_dict().items()}, 0
@@ -177,7 +189,7 @@ def main() -> None:
             if stalled >= args.patience:
                 break
         model.load_state_dict(best_state)
-        _, metrics = evaluate(model, loaders[2], loss_fn, device)
+        _, metrics = evaluate(model, loaders[2], loss_fn, device, test.station_ids)
         result = {"model": "mlp", "best_epoch": min(history, key=lambda item: item["val_loss"])["epoch"], "history": history, "test_metrics": metrics}
     (run_dir / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"Complete | test={result['test_metrics']['global']}", flush=True)

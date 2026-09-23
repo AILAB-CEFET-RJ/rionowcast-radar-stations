@@ -86,8 +86,12 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
 - [ ] Executar M2 e M4 equivalentes usando o crop, com o mesmo split temporal.
 - [x] Implementar persistência por estação como baseline sem radar.
 - [x] Implementar modelo temporal multivariado somente com estações.
-- [ ] Comparar os três modelos nos mesmos pares timestamp/estação/horizonte,
-  incluindo métricas por intensidade e por estação.
+- [x] Registrar métricas globais e por horizonte para cada estação nos novos
+  runners de radar e somente-estações.
+- [x] Implementar comparador de `summary.json` com validação de splits e do
+  número de observações de teste.
+- [ ] Executar e comparar os três modelos nos mesmos pares
+  timestamp/estação/horizonte, incluindo métricas por intensidade e por estação.
 
 O STConvS2S atual recebe somente os campos de radar; as estações fornecem os
 targets e a máscara da loss. Portanto, a primeira comparação será
@@ -101,6 +105,9 @@ O MLP recebe, para cada uma das 33 estações, os cinco valores passados em
 `log1p(mm/15min)` e suas máscaras de disponibilidade; ele prevê cinco passos
 futuros nas mesmas estações. Seus resultados usam o mesmo esquema de métricas
 globais, por horizonte e por intensidade dos experimentos de radar.
+`scripts/compare_experiments.py` consolida resultados em `comparison.json` e
+`comparison.md`; métricas por estação só são comparadas quando todos os
+experimentos fornecidos as possuem.
 
 ### Matriz Experimental
 
@@ -150,3 +157,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-21 | Retomada V1 | Concluído | `iteration_1_last.pt` permite retomar na próxima época após interrupção; validada por testes unitários. |
 | 2026-09-22 | Crop da região das estações | Concluído | Crop dinâmico por CSV de mapeamento, com margem configurável e testes de preservação das observações. |
 | 2026-09-22 | Baselines somente com estações | Concluído | Dataset temporal para 33 estações, persistência e MLP multivariado implementados e testados. |
+| 2026-09-22 | Comparação por estação | Concluído | Runners registram métricas por estação; comparador valida splits e contagens antes de gerar tabelas. |

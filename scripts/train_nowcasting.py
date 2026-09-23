@@ -37,6 +37,7 @@ from nowcasting.losses import (
     WeightedMaskedHuberLoss,
     WeightedMaskedMAELoss,
 )
+from nowcasting.station_dataset import load_station_pixels
 
 
 PRECIPITATION_BINS = (
@@ -315,16 +316,26 @@ def criterion_from_args(args: argparse.Namespace, weights: tuple[float, ...]):
     return WeightedMaskedHuberLoss(args.huber_delta, weights)
 
 
-def empty_stats(horizons: int) -> dict:
-    return {
+def empty_stats(horizons: int, station_locations: list[tuple[int, int, int]] | None = None) -> dict:
+    stats = {
         "global": {"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0},
         "horizons": [{"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0} for _ in range(horizons)],
         "intensity": {name: {"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0}
                       for name, _, _ in PRECIPITATION_BINS},
     }
+    if station_locations:
+        stats["stations"] = {
+            str(station_id): {
+                "global": {"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0},
+                "horizons": [{"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0} for _ in range(horizons)],
+            }
+            for station_id, _, _ in station_locations
+        }
+    return stats
 
 
-def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> None:
+def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor,
+                 station_locations: list[tuple[int, int, int]] | None = None) -> None:
     prediction = torch.clamp(torch.expm1(output), min=0.0)
     observed = torch.expm1(target)
     valid = mask > 0
@@ -345,6 +356,14 @@ def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: 
     for name, low, high in PRECIPITATION_BINS:
         selection = valid & (observed >= low) & (observed < high)
         accumulate(stats["intensity"][name], selection)
+    if station_locations:
+        for station_id, row, column in station_locations:
+            station = stats["stations"][str(station_id)]
+            station_valid = valid[:, :, :, row, column]
+            station_error = error[:, :, :, row, column]
+            accumulate(station["global"], station_valid, station_error)
+            for index, destination in enumerate(station["horizons"]):
+                accumulate(destination, station_valid[:, :, index], station_error[:, :, index])
 
 
 def finalized_stats(stats: dict) -> dict:
@@ -354,17 +373,27 @@ def finalized_stats(stats: dict) -> dict:
             return {"n": 0, "rmse": None, "mae": None, "bias": None}
         return {"n": n, "rmse": (value["se"] / n) ** 0.5,
                 "mae": value["ae"] / n, "bias": value["bias"] / n}
-    return {
+    result = {
         "global": finalize(stats["global"]),
         "horizons": [finalize(item) for item in stats["horizons"]],
         "intensity": {name: finalize(item) for name, item in stats["intensity"].items()},
     }
+    if "stations" in stats:
+        result["stations"] = {
+            station_id: {"global": finalize(values["global"]),
+                         "horizons": [finalize(item) for item in values["horizons"]]}
+            for station_id, values in stats["stations"].items()
+        }
+    return result
 
 
 def synchronize_stats(stats: dict, device: torch.device) -> None:
     if not dist.is_initialized() or stats is None:
         return
     leaves = [stats["global"], *stats["horizons"], *stats["intensity"].values()]
+    if "stations" in stats:
+        for station in stats["stations"].values():
+            leaves.extend((station["global"], *station["horizons"]))
     for value in leaves:
         totals = torch.tensor([value["se"], value["ae"], value["bias"], value["n"]], device=device)
         dist.all_reduce(totals, op=dist.ReduceOp.SUM)
@@ -384,7 +413,28 @@ def loader_options(args: argparse.Namespace) -> dict:
     return options
 
 
-def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
+def station_locations(dataset: RadarStationMemmapDataset, args: argparse.Namespace) -> list[tuple[int, int, int]]:
+    """Retorna IDs e coordenadas das estações no sistema de referência do dataset."""
+    first_year = dataset.years[0]
+    frames = dataset.year_data[first_year]["frames"]
+    pixels, station_ids = load_station_pixels(
+        args.station_mapping, frames.shape[1], frames.shape[2],
+        height_orig=args.mapping_height_orig, width_orig=args.mapping_width_orig,
+    )
+    if dataset.crop_bounds is not None:
+        top, bottom, left, right = dataset.crop_bounds
+        inside = ((pixels[:, 0] >= top) & (pixels[:, 0] < bottom) &
+                  (pixels[:, 1] >= left) & (pixels[:, 1] < right))
+        if not inside.all():
+            raise ValueError("O crop excluiu uma estação do mapeamento.")
+        pixels = pixels.copy()
+        pixels[:, 0] -= top
+        pixels[:, 1] -= left
+    return [(station_id, int(row), int(column)) for station_id, (row, column) in zip(station_ids, pixels)]
+
+
+def evaluate(model, loader, criterion, device, collect_metrics: bool = False,
+             station_locations: list[tuple[int, int, int]] | None = None):
     model.eval()
     total_loss = 0.0
     stats = None
@@ -397,8 +447,8 @@ def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
             total_loss += criterion(output, target, mask).item()
             if collect_metrics:
                 if stats is None:
-                    stats = empty_stats(target.shape[2])
-                update_stats(stats, output, target, mask)
+                    stats = empty_stats(target.shape[2], station_locations)
+                update_stats(stats, output, target, mask, station_locations)
     if not len(loader):
         raise ValueError("DataLoader vazio.")
     loss_parts = torch.tensor([total_loss, len(loader)], device=device)
@@ -582,7 +632,9 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if args.distributed: dist.barrier()
     state = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
     (model.module if args.distributed else model).load_state_dict(state["model_state_dict"])
-    _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True)
+    locations = station_locations(test_dataset, args)
+    _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
+                          station_locations=locations)
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
