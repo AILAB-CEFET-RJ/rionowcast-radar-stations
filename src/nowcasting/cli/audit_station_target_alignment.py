@@ -95,6 +95,29 @@ def main() -> None:
     report["coordinates_match"] = (direct_rows == pipeline_rows) & (direct_columns == pipeline_columns)
     report["pipeline_coordinate_present"] = report["pipeline_observations"] > 0
     report["direct_coordinate_present"] = report["direct_observations"] > 0
+    observed_coordinates = np.asarray(sorted(counts), dtype=np.int64)
+    expected_coordinates = set(zip(pipeline_rows.tolist(), pipeline_columns.tolist()))
+    observed_coordinate_set = set(map(tuple, observed_coordinates.tolist()))
+    unmatched_coordinates = observed_coordinate_set - expected_coordinates
+    nearest_rows, nearest_columns, nearest_distances, nearest_counts = [], [], [], []
+    for row, column, present in zip(pipeline_rows, pipeline_columns, report["pipeline_coordinate_present"]):
+        if present or not len(observed_coordinates):
+            nearest_rows.append(None)
+            nearest_columns.append(None)
+            nearest_distances.append(0.0 if present else None)
+            nearest_counts.append(0 if present else None)
+            continue
+        distances = np.hypot(observed_coordinates[:, 0] - row, observed_coordinates[:, 1] - column)
+        index = int(distances.argmin())
+        candidate = tuple(observed_coordinates[index])
+        nearest_rows.append(int(candidate[0]))
+        nearest_columns.append(int(candidate[1]))
+        nearest_distances.append(float(distances[index]))
+        nearest_counts.append(int(counts[candidate]))
+    report["nearest_sparse_row"] = nearest_rows
+    report["nearest_sparse_column"] = nearest_columns
+    report["nearest_sparse_distance_pixels"] = nearest_distances
+    report["nearest_sparse_observations"] = nearest_counts
     report["alignment_status"] = np.select(
         [
             report["coordinates_match"] & report["pipeline_coordinate_present"],
@@ -107,6 +130,13 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     report.to_csv(args.output_dir / "station_target_alignment.csv", index=False)
+    pd.DataFrame(
+        [
+            {"row": row, "column": column, "observations": count}
+            for (row, column), count in sorted(counts.items())
+            if (row, column) in unmatched_coordinates
+        ]
+    ).to_csv(args.output_dir / "unmapped_sparse_coordinates.csv", index=False)
     summary = {
         "dataset_root": str(args.dataset_root),
         "years_loaded": years_loaded,
@@ -116,6 +146,8 @@ def main() -> None:
         "coordinates_matching": int(report["coordinates_match"].sum()),
         "pipeline_coordinates_present": int(report["pipeline_coordinate_present"].sum()),
         "stations_requiring_pipeline_transform": int((~report["coordinates_match"] & report["pipeline_coordinate_present"]).sum()),
+        "sparse_coordinates": int(len(observed_coordinate_set)),
+        "unmapped_sparse_coordinates": int(len(unmatched_coordinates)),
         "status_counts": report["alignment_status"].value_counts().to_dict(),
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
