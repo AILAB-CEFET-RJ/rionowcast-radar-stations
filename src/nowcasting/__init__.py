@@ -1,7 +1,6 @@
-"""Componentes específicos do projeto Radar Sumaré + estações."""
+"""Componentes especificos do projeto Radar Sumare e estacoes.
 
-from .dataset import RadarStationMemmapDataset, parse_years
-from .station_dataset import StationSequenceDataset
-from .station_model import StationMLP
-
-__all__ = ["RadarStationMemmapDataset", "StationMLP", "StationSequenceDataset", "parse_years"]
+Os modulos devem ser importados explicitamente, por exemplo:
+``from nowcasting.dataset import RadarStationMemmapDataset``. Isso mantem as
+CLIs que nao treinam modelos utilizaveis sem carregar PyTorch.
+"""
