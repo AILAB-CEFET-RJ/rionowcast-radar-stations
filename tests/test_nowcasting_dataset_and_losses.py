@@ -13,6 +13,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from nowcasting.dataset import RadarStationMemmapDataset, parse_years
 from nowcasting.losses import MaskedMAELoss, WeightedMaskedMAELoss
+from nowcasting.station_dataset import StationSequenceDataset
+from nowcasting.station_model import StationMLP
 
 
 def create_year(root: Path, year: int) -> None:
@@ -120,6 +122,24 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertEqual(tuple(y.shape), (1, 5, 1, 1))
             self.assertEqual(int(mask.sum()), 1)
             self.assertAlmostEqual(y[0, 0, 0, 0].item(), np.log1p(2.0))
+
+    def test_station_sequence_dataset_and_model_use_values_and_masks(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n2,1,1\n", encoding="utf-8")
+            dataset = StationSequenceDataset(
+                root, [2020], mapping=mapping, stride=5,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+            inputs, target, mask = dataset[0]
+            output = StationMLP(station_count=2)(inputs.unsqueeze(0))
+
+            self.assertEqual(tuple(inputs.shape), (5, 2, 2))
+            self.assertEqual(tuple(target.shape), (5, 2))
+            self.assertEqual(int(mask.sum()), 2)
+            self.assertEqual(tuple(output.shape), (1, 5, 2))
 
     def test_weighted_loss_gives_more_weight_to_extreme_target(self):
         prediction = torch.zeros((1, 1, 1, 1, 2))

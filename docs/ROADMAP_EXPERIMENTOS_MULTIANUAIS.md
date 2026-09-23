@@ -84,10 +84,23 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
 - [x] Garantir compatibilidade do crop com o sampler balanceado e com
   checkpoints retomáveis.
 - [ ] Executar M2 e M4 equivalentes usando o crop, com o mesmo split temporal.
-- [ ] Implementar persistência por estação como baseline sem radar.
-- [ ] Implementar modelo temporal multivariado somente com estações.
+- [x] Implementar persistência por estação como baseline sem radar.
+- [x] Implementar modelo temporal multivariado somente com estações.
 - [ ] Comparar os três modelos nos mesmos pares timestamp/estação/horizonte,
   incluindo métricas por intensidade e por estação.
+
+O STConvS2S atual recebe somente os campos de radar; as estações fornecem os
+targets e a máscara da loss. Portanto, a primeira comparação será
+**radar supervisionado por estações** versus **somente histórico das
+estações**. Um modelo de fusão que receba radar e histórico de estações como
+entrada é uma extensão posterior e não deve ser confundido com o STConvS2S
+atual.
+
+`scripts/train_station_baseline.py` oferece os modelos `persistence` e `mlp`.
+O MLP recebe, para cada uma das 33 estações, os cinco valores passados em
+`log1p(mm/15min)` e suas máscaras de disponibilidade; ele prevê cinco passos
+futuros nas mesmas estações. Seus resultados usam o mesmo esquema de métricas
+globais, por horizonte e por intensidade dos experimentos de radar.
 
 ### Matriz Experimental
 
@@ -136,3 +149,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-20 | Auditoria do treino | Concluído | 513 janelas extremas, equivalentes a 0,8565% das 59.897 janelas. |
 | 2026-09-21 | Retomada V1 | Concluído | `iteration_1_last.pt` permite retomar na próxima época após interrupção; validada por testes unitários. |
 | 2026-09-22 | Crop da região das estações | Concluído | Crop dinâmico por CSV de mapeamento, com margem configurável e testes de preservação das observações. |
+| 2026-09-22 | Baselines somente com estações | Concluído | Dataset temporal para 33 estações, persistência e MLP multivariado implementados e testados. |
