@@ -37,6 +37,7 @@ from nowcasting.losses import (
     WeightedMaskedHuberLoss,
     WeightedMaskedMAELoss,
 )
+from nowcasting.station_dataset import load_station_pixels
 
 
 PRECIPITATION_BINS = (
@@ -52,7 +53,8 @@ RESUME_CONFIG_KEYS = (
     "target_source", "loss", "huber_delta", "loss_weights", "sampler_thresholds",
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
-    "stconvs2s_commit",
+    "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
+    "mapping_height_orig", "mapping_width_orig", "crop",
 )
 
 
@@ -107,6 +109,21 @@ def parse_arguments() -> argparse.Namespace:
         help="Clone limpo e fixado do repositório da arquitetura (submódulo por padrão).",
     )
     parser.add_argument("--dataset-root", type=Path, required=True)
+    parser.add_argument(
+        "--crop-stations", action="store_true",
+        help="Recorta radar e targets para o retângulo das estações AlertaRio com margem.",
+    )
+    parser.add_argument(
+        "--crop-margin-pixels", type=int, default=20,
+        help="Margem espacial do crop de estações, em pixels da grade do dataset.",
+    )
+    parser.add_argument(
+        "--station-mapping", type=Path,
+        default=PROJECT_ROOT / "data" / "mapeamento_pixel_estacao_alertario.csv",
+        help="CSV com pixel_i/pixel_j das estações no grid original do radar.",
+    )
+    parser.add_argument("--mapping-height-orig", type=int, default=656)
+    parser.add_argument("--mapping-width-orig", type=int, default=654)
     parser.add_argument("--train-years", required=True)
     parser.add_argument("--val-years", required=True)
     parser.add_argument("--test-years", required=True)
@@ -299,16 +316,26 @@ def criterion_from_args(args: argparse.Namespace, weights: tuple[float, ...]):
     return WeightedMaskedHuberLoss(args.huber_delta, weights)
 
 
-def empty_stats(horizons: int) -> dict:
-    return {
+def empty_stats(horizons: int, station_locations: list[tuple[int, int, int]] | None = None) -> dict:
+    stats = {
         "global": {"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0},
         "horizons": [{"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0} for _ in range(horizons)],
         "intensity": {name: {"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0}
                       for name, _, _ in PRECIPITATION_BINS},
     }
+    if station_locations:
+        stats["stations"] = {
+            str(station_id): {
+                "global": {"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0},
+                "horizons": [{"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0} for _ in range(horizons)],
+            }
+            for station_id, _, _ in station_locations
+        }
+    return stats
 
 
-def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> None:
+def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor,
+                 station_locations: list[tuple[int, int, int]] | None = None) -> None:
     prediction = torch.clamp(torch.expm1(output), min=0.0)
     observed = torch.expm1(target)
     valid = mask > 0
@@ -329,6 +356,14 @@ def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: 
     for name, low, high in PRECIPITATION_BINS:
         selection = valid & (observed >= low) & (observed < high)
         accumulate(stats["intensity"][name], selection)
+    if station_locations:
+        for station_id, row, column in station_locations:
+            station = stats["stations"][str(station_id)]
+            station_valid = valid[:, :, :, row, column]
+            station_error = error[:, :, :, row, column]
+            accumulate(station["global"], station_valid, station_error)
+            for index, destination in enumerate(station["horizons"]):
+                accumulate(destination, station_valid[:, :, index], station_error[:, :, index])
 
 
 def finalized_stats(stats: dict) -> dict:
@@ -338,17 +373,27 @@ def finalized_stats(stats: dict) -> dict:
             return {"n": 0, "rmse": None, "mae": None, "bias": None}
         return {"n": n, "rmse": (value["se"] / n) ** 0.5,
                 "mae": value["ae"] / n, "bias": value["bias"] / n}
-    return {
+    result = {
         "global": finalize(stats["global"]),
         "horizons": [finalize(item) for item in stats["horizons"]],
         "intensity": {name: finalize(item) for name, item in stats["intensity"].items()},
     }
+    if "stations" in stats:
+        result["stations"] = {
+            station_id: {"global": finalize(values["global"]),
+                         "horizons": [finalize(item) for item in values["horizons"]]}
+            for station_id, values in stats["stations"].items()
+        }
+    return result
 
 
 def synchronize_stats(stats: dict, device: torch.device) -> None:
     if not dist.is_initialized() or stats is None:
         return
     leaves = [stats["global"], *stats["horizons"], *stats["intensity"].values()]
+    if "stations" in stats:
+        for station in stats["stations"].values():
+            leaves.extend((station["global"], *station["horizons"]))
     for value in leaves:
         totals = torch.tensor([value["se"], value["ae"], value["bias"], value["n"]], device=device)
         dist.all_reduce(totals, op=dist.ReduceOp.SUM)
@@ -368,7 +413,28 @@ def loader_options(args: argparse.Namespace) -> dict:
     return options
 
 
-def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
+def station_locations(dataset: RadarStationMemmapDataset, args: argparse.Namespace) -> list[tuple[int, int, int]]:
+    """Retorna IDs e coordenadas das estações no sistema de referência do dataset."""
+    first_year = dataset.years[0]
+    frames = dataset.year_data[first_year]["frames"]
+    pixels, station_ids = load_station_pixels(
+        args.station_mapping, frames.shape[1], frames.shape[2],
+        height_orig=args.mapping_height_orig, width_orig=args.mapping_width_orig,
+    )
+    if dataset.crop_bounds is not None:
+        top, bottom, left, right = dataset.crop_bounds
+        inside = ((pixels[:, 0] >= top) & (pixels[:, 0] < bottom) &
+                  (pixels[:, 1] >= left) & (pixels[:, 1] < right))
+        if not inside.all():
+            raise ValueError("O crop excluiu uma estação do mapeamento.")
+        pixels = pixels.copy()
+        pixels[:, 0] -= top
+        pixels[:, 1] -= left
+    return [(station_id, int(row), int(column)) for station_id, (row, column) in zip(station_ids, pixels)]
+
+
+def evaluate(model, loader, criterion, device, collect_metrics: bool = False,
+             station_locations: list[tuple[int, int, int]] | None = None):
     model.eval()
     total_loss = 0.0
     stats = None
@@ -381,8 +447,8 @@ def evaluate(model, loader, criterion, device, collect_metrics: bool = False):
             total_loss += criterion(output, target, mask).item()
             if collect_metrics:
                 if stats is None:
-                    stats = empty_stats(target.shape[2])
-                update_stats(stats, output, target, mask)
+                    stats = empty_stats(target.shape[2], station_locations)
+                update_stats(stats, output, target, mask, station_locations)
     if not len(loader):
         raise ValueError("DataLoader vazio.")
     loss_parts = torch.tensor([total_loss, len(loader)], device=device)
@@ -566,7 +632,9 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if args.distributed: dist.barrier()
     state = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
     (model.module if args.distributed else model).load_state_dict(state["model_state_dict"])
-    _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True)
+    locations = station_locations(test_dataset, args)
+    _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
+                          station_locations=locations)
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
@@ -590,8 +658,9 @@ def main() -> None:
             or args.iterations <= 0 or args.step <= 0
             or args.gradient_accumulation_steps <= 0 or args.log_interval < 0
             or args.prefetch_factor <= 0 or args.checkpoint_every <= 0
+            or args.crop_margin_pixels < 0 or args.mapping_height_orig <= 0 or args.mapping_width_orig <= 0
             or (args.stride is not None and args.stride <= 0)):
-        raise ValueError("epochs, patience, batch-size, iterations, step, stride, gradient-accumulation-steps, prefetch-factor e checkpoint-every devem ser positivos; workers e log-interval nao podem ser negativos.")
+        raise ValueError("Parâmetros de treino e dimensões do mapeamento devem ser positivos; workers, log-interval e crop-margin-pixels não podem ser negativos.")
     if args.persistent_workers and not args.workers:
         raise ValueError("--persistent-workers requer --workers maior que zero.")
 
@@ -616,7 +685,6 @@ def main() -> None:
         if args.run_name and args.run_name != run_dir.name:
             raise ValueError("--run-name deve corresponder ao diretorio do checkpoint ao usar --resume.")
         resume_state = torch.load(resume_path, map_location="cpu", weights_only=False)
-        validate_resume_checkpoint(resume_state, configuration, world_size)
         if resume_state.get("iteration") != 0:
             raise ValueError("--resume suporta somente checkpoints da primeira iteracao na versao atual.")
         if is_main(rank):
@@ -630,12 +698,33 @@ def main() -> None:
         dist.barrier()
     datasets = (
         RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
-                                  target_source=args.target_source, split_name="train"),
+                                  target_source=args.target_source, split_name="train",
+                                  crop_stations=args.crop_stations,
+                                  crop_margin_pixels=args.crop_margin_pixels,
+                                  station_mapping=args.station_mapping,
+                                  mapping_height_orig=args.mapping_height_orig,
+                                  mapping_width_orig=args.mapping_width_orig),
         RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.stride or args.step,
-                                  target_source=args.target_source, split_name="val"),
+                                  target_source=args.target_source, split_name="val",
+                                  crop_stations=args.crop_stations,
+                                  crop_margin_pixels=args.crop_margin_pixels,
+                                  station_mapping=args.station_mapping,
+                                  mapping_height_orig=args.mapping_height_orig,
+                                  mapping_width_orig=args.mapping_width_orig),
         RadarStationMemmapDataset(args.dataset_root, test_years, stride=args.stride or args.step,
-                                  target_source=args.target_source, split_name="test"),
+                                  target_source=args.target_source, split_name="test",
+                                  crop_stations=args.crop_stations,
+                                  crop_margin_pixels=args.crop_margin_pixels,
+                                  station_mapping=args.station_mapping,
+                                  mapping_height_orig=args.mapping_height_orig,
+                                  mapping_width_orig=args.mapping_width_orig),
     )
+    crop_metadata = datasets[0].crop_metadata
+    if any(dataset.crop_metadata != crop_metadata for dataset in datasets[1:]):
+        raise ValueError("O crop calculado difere entre os splits.")
+    configuration["crop"] = crop_metadata
+    if resume_state is not None:
+        validate_resume_checkpoint(resume_state, configuration, world_size)
     if is_main(rank) and resume_state is None:
         with (run_dir / "configuration.json").open("w", encoding="utf-8") as file:
             json.dump(configuration, file, indent=2)

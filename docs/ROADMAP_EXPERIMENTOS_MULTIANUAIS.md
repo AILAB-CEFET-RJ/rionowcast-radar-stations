@@ -67,17 +67,56 @@ disco sem alterar a arquitetura STConvS2S.
   maior em GPUs com VRAM limitada.
 - [x] Implementar retomada V1 entre épocas, com checkpoint atômico do último
   estado, otimizador, early stopping, histórico e estados aleatórios.
+- [x] Implementar crop dinâmico da região das estações AlertaRio, sem duplicar
+  os memmaps, com margem configurável e metadados no experimento.
 - [ ] Registrar no log a distribuição efetivamente sorteada pelo sampler em
   cada época.
+
+### Região Das Estações E Baselines
+
+O crop é derivado de `data/mapeamento_pixel_estacao_alertario.csv`, convertido
+para a resolução do dataset e expandido por uma margem em pixels. O runner usa
+`--crop-stations --crop-margin-pixels 20` para ativá-lo; a configuração salva
+os limites efetivos, dimensão e quantidade de estações. Os targets esparsos
+são filtrados e reindexados em memória, mantendo o dataset original intacto.
+
+- [x] Crop dinâmico de radar, targets e máscara para a região das estações.
+- [x] Garantir compatibilidade do crop com o sampler balanceado e com
+  checkpoints retomáveis.
+- [ ] Executar M2 e M4 equivalentes usando o crop, com o mesmo split temporal.
+- [x] Implementar persistência por estação como baseline sem radar.
+- [x] Implementar modelo temporal multivariado somente com estações.
+- [x] Registrar métricas globais e por horizonte para cada estação nos novos
+  runners de radar e somente-estações.
+- [x] Implementar comparador de `summary.json` com validação de splits e do
+  número de observações de teste.
+- [ ] Executar e comparar os três modelos nos mesmos pares
+  timestamp/estação/horizonte, incluindo métricas por intensidade e por estação.
+
+O STConvS2S atual recebe somente os campos de radar; as estações fornecem os
+targets e a máscara da loss. Portanto, a primeira comparação será
+**radar supervisionado por estações** versus **somente histórico das
+estações**. Um modelo de fusão que receba radar e histórico de estações como
+entrada é uma extensão posterior e não deve ser confundido com o STConvS2S
+atual.
+
+`scripts/train_station_baseline.py` oferece os modelos `persistence` e `mlp`.
+O MLP recebe, para cada uma das 33 estações, os cinco valores passados em
+`log1p(mm/15min)` e suas máscaras de disponibilidade; ele prevê cinco passos
+futuros nas mesmas estações. Seus resultados usam o mesmo esquema de métricas
+globais, por horizonte e por intensidade dos experimentos de radar.
+`scripts/compare_experiments.py` consolida resultados em `comparison.json` e
+`comparison.md`; métricas por estação só são comparadas quando todos os
+experimentos fornecidos as possuem.
 
 ### Matriz Experimental
 
 | ID | Loss | Sampler | Repetições iniciais | Estado |
 |---|---|---|---:|
 | M1 | `masked-mae` | não | 1 | Concluído |
-| M2 | `masked-huber` | não | 1 | Interrompido por congelamento da Skat; reiniciar na Arietis |
-| M3 | `weighted-huber` | não | 1 | Pendente |
-| M4 | `weighted-huber` | balanceado | 1 | Pendente |
+| M2 | `masked-huber` | não | 1 | Concluído no CENAPAD |
+| M3 | `weighted-huber` | não | 1 | Concluído no CENAPAD |
+| M4 | `weighted-huber` | balanceado | 1 | Concluído na Skat |
 
 As configurações finalistas devem ser repetidas com 2 ou 3 seeds. Métricas
 globais devem ser complementadas por resultados por horizonte e intensidade.
@@ -116,3 +155,7 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-20 | Dataset esparso na Arietis | Concluído | Dataset 128x128 reconstruído e validado para 2012-2024, com 18 GiB. |
 | 2026-09-20 | Auditoria do treino | Concluído | 513 janelas extremas, equivalentes a 0,8565% das 59.897 janelas. |
 | 2026-09-21 | Retomada V1 | Concluído | `iteration_1_last.pt` permite retomar na próxima época após interrupção; validada por testes unitários. |
+| 2026-09-22 | Crop da região das estações | Concluído | Crop dinâmico por CSV de mapeamento, com margem configurável e testes de preservação das observações. |
+| 2026-09-22 | Baselines somente com estações | Concluído | Dataset temporal para 33 estações, persistência e MLP multivariado implementados e testados. |
+| 2026-09-22 | Comparação por estação | Concluído | Runners registram métricas por estação; comparador valida splits e contagens antes de gerar tabelas. |
+| 2026-09-23 | M4 multianual na Skat | Concluído | Early stopping na época 14; melhor época 4; teste: RMSE 0,53957, MAE 0,10985, Bias +0,01868. |

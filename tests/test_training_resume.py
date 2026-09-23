@@ -44,6 +44,20 @@ def configuration() -> dict:
 
 
 class TrainingResumeTests(unittest.TestCase):
+    def test_radar_metrics_include_station_coordinates(self):
+        output = torch.zeros((1, 1, 1, 2, 2))
+        target = torch.zeros_like(output)
+        mask = torch.zeros_like(output)
+        target[0, 0, 0, 1, 0] = np.log1p(2.0)
+        mask[0, 0, 0, 1, 0] = 1.0
+
+        stats = train_nowcasting.empty_stats(1, [(7, 1, 0)])
+        train_nowcasting.update_stats(stats, output, target, mask, [(7, 1, 0)])
+        metrics = train_nowcasting.finalized_stats(stats)
+
+        self.assertEqual(metrics["stations"]["7"]["global"]["n"], 1)
+        self.assertEqual(metrics["stations"]["7"]["horizons"][0]["n"], 1)
+
     def test_rng_state_restores_python_numpy_and_torch_sequences(self):
         random.seed(99)
         np.random.seed(99)

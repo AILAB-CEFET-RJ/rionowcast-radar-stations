@@ -13,6 +13,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from nowcasting.dataset import RadarStationMemmapDataset, parse_years
 from nowcasting.losses import MaskedMAELoss, WeightedMaskedMAELoss
+from nowcasting.station_dataset import StationSequenceDataset
+from nowcasting.station_model import StationMLP
 
 
 def create_year(root: Path, year: int) -> None:
@@ -28,6 +30,8 @@ def create_year(root: Path, year: int) -> None:
     mask[:] = 0
     target[5, 0, 0, 0] = np.log1p(2.0)
     mask[5, 0, 0, 0] = 1
+    target[5, 1, 1, 0] = np.log1p(20.0)
+    mask[5, 1, 1, 0] = 1
     radar.flush()
     target.flush()
     mask.flush()
@@ -37,6 +41,30 @@ def create_year(root: Path, year: int) -> None:
         json.dump(
             {"shape": list(shape_target), "Y_dtype": "float32", "M_dtype": "uint8",
              "Y_file": "Y_alertario.dat", "M_file": "M_alertario.dat"}, file,
+        )
+
+
+def create_sparse_year(root: Path, year: int) -> None:
+    year_dir = root / f"year={year}"
+    year_dir.mkdir(parents=True)
+    shape_radar = (12, 2, 2, 3)
+    shape_target = (12, 2, 2, 1)
+    radar = np.memmap(year_dir / "radar_frames.dat", dtype=np.uint8, mode="w+", shape=shape_radar)
+    radar[:] = 0
+    radar.flush()
+    np.savez(
+        year_dir / "targets_alertario_sparse.npz",
+        frame=np.array([5, 5], dtype=np.int32),
+        row=np.array([0, 1], dtype=np.uint16),
+        column=np.array([0, 1], dtype=np.uint16),
+        value=np.array([np.log1p(2.0), np.log1p(20.0)], dtype=np.float32),
+    )
+    with (year_dir / "metadata.json").open("w", encoding="utf-8") as file:
+        json.dump({"shape": list(shape_radar), "dtype": "uint8"}, file)
+    with (year_dir / "targets_alertario_metadata.json").open("w", encoding="utf-8") as file:
+        json.dump(
+            {"shape": list(shape_target), "format": "sparse", "sparse_file": "targets_alertario_sparse.npz"},
+            file,
         )
 
 
@@ -50,12 +78,68 @@ class NowcastingDatasetTests(unittest.TestCase):
             create_year(root, 2020)
             create_year(root, 2021)
             dataset = RadarStationMemmapDataset(root, [2020, 2021], stride=5, split_name="train")
-            self.assertEqual(len(dataset), 4)
+            self.assertEqual(len(dataset), 2)
             self.assertEqual({year for year, _ in dataset.samples}, {2020, 2021})
             x, y, m = dataset[0]
             self.assertEqual(tuple(x.shape), (3, 5, 2, 2))
             self.assertEqual(tuple(y.shape), (1, 5, 2, 2))
             self.assertEqual(tuple(m.shape), (1, 5, 2, 2))
+
+    def test_station_crop_preserves_observations_inside_the_roi(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_year(root, 2020)
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n", encoding="utf-8")
+
+            dataset = RadarStationMemmapDataset(
+                root, [2020], stride=5, split_name="crop", crop_stations=True,
+                crop_margin_pixels=0, station_mapping=mapping,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+            x, y, mask = dataset[0]
+
+            self.assertEqual(tuple(x.shape), (3, 5, 1, 1))
+            self.assertEqual(tuple(y.shape), (1, 5, 1, 1))
+            self.assertEqual(int(mask.sum()), 1)
+            self.assertAlmostEqual(y[0, 0, 0, 0].item(), np.log1p(2.0))
+            self.assertEqual(dataset.crop_metadata["shape"], [1, 1])
+
+    def test_station_crop_filters_and_reindexes_sparse_targets(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n", encoding="utf-8")
+
+            dataset = RadarStationMemmapDataset(
+                root, [2020], stride=5, split_name="sparse-crop", crop_stations=True,
+                crop_margin_pixels=0, station_mapping=mapping,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+            _, y, mask = dataset[0]
+
+            self.assertEqual(tuple(y.shape), (1, 5, 1, 1))
+            self.assertEqual(int(mask.sum()), 1)
+            self.assertAlmostEqual(y[0, 0, 0, 0].item(), np.log1p(2.0))
+
+    def test_station_sequence_dataset_and_model_use_values_and_masks(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n2,1,1\n", encoding="utf-8")
+            dataset = StationSequenceDataset(
+                root, [2020], mapping=mapping, stride=5,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+            inputs, target, mask = dataset[0]
+            output = StationMLP(station_count=2)(inputs.unsqueeze(0))
+
+            self.assertEqual(tuple(inputs.shape), (5, 2, 2))
+            self.assertEqual(tuple(target.shape), (5, 2))
+            self.assertEqual(int(mask.sum()), 2)
+            self.assertEqual(tuple(output.shape), (1, 5, 2))
 
     def test_weighted_loss_gives_more_weight_to_extreme_target(self):
         prediction = torch.zeros((1, 1, 1, 1, 2))
