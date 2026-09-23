@@ -14,8 +14,7 @@ treino, validação e teste.
   `[batch, 1, 5, 128, 128]`.
 - [x] Losses mascaradas e ponderadas, sampler balanceado e métricas por faixa
   implementados no pacote do projeto.
-- [x] Runner independente do projeto criado em
-  `scripts/train_nowcasting.py`.
+- [x] Runner independente do projeto criado como `nowcasting-train`.
 - [x] Dataset de radar `128 x 128` disponível e validado para 2012-2024.
 - [x] Targets AlertaRio esparsos `128 x 128` disponíveis e validados para
   2012-2024.
@@ -100,12 +99,12 @@ estações**. Um modelo de fusão que receba radar e histórico de estações co
 entrada é uma extensão posterior e não deve ser confundido com o STConvS2S
 atual.
 
-`scripts/train_station_baseline.py` oferece os modelos `persistence` e `mlp`.
+`nowcasting-train-stations` oferece os modelos `persistence` e `mlp`.
 O MLP recebe, para cada uma das 33 estações, os cinco valores passados em
 `log1p(mm/15min)` e suas máscaras de disponibilidade; ele prevê cinco passos
 futuros nas mesmas estações. Seus resultados usam o mesmo esquema de métricas
 globais, por horizonte e por intensidade dos experimentos de radar.
-`scripts/compare_experiments.py` consolida resultados em `comparison.json` e
+`nowcasting-compare` consolida resultados em `comparison.json` e
 `comparison.md`; métricas por estação só são comparadas quando todos os
 experimentos fornecidos as possuem.
 

@@ -1,5 +1,5 @@
-import importlib.util
 import random
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,10 +9,9 @@ import torch
 
 
 PROJECT_ROOT = Path(__file__).parents[1]
-SCRIPT_PATH = PROJECT_ROOT / "scripts" / "train_nowcasting.py"
-SPEC = importlib.util.spec_from_file_location("train_nowcasting", SCRIPT_PATH)
-train_nowcasting = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(train_nowcasting)
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from nowcasting.cli import train as train_nowcasting
 
 
 def configuration() -> dict:

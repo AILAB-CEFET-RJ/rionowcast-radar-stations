@@ -1,5 +1,5 @@
-import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 
 
-SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "downsample_memmap_dataset.py"
-SPEC = importlib.util.spec_from_file_location("downsample_memmap_dataset", SCRIPT_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+PROJECT_ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from nowcasting.cli import downsample_memmap_dataset as MODULE
 
 
 class DownsampleMemmapDatasetTests(unittest.TestCase):
