@@ -114,9 +114,9 @@ experimentos fornecidos as possuem.
 | ID | Loss | Sampler | Repetições iniciais | Estado |
 |---|---|---|---:|
 | M1 | `masked-mae` | não | 1 | Concluído |
-| M2 | `masked-huber` | não | 1 | Interrompido por congelamento da Skat; reiniciar na Arietis |
-| M3 | `weighted-huber` | não | 1 | Pendente |
-| M4 | `weighted-huber` | balanceado | 1 | Pendente |
+| M2 | `masked-huber` | não | 1 | Concluído no CENAPAD |
+| M3 | `weighted-huber` | não | 1 | Concluído no CENAPAD |
+| M4 | `weighted-huber` | balanceado | 1 | Concluído na Skat |
 
 As configurações finalistas devem ser repetidas com 2 ou 3 seeds. Métricas
 globais devem ser complementadas por resultados por horizonte e intensidade.
@@ -158,3 +158,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-22 | Crop da região das estações | Concluído | Crop dinâmico por CSV de mapeamento, com margem configurável e testes de preservação das observações. |
 | 2026-09-22 | Baselines somente com estações | Concluído | Dataset temporal para 33 estações, persistência e MLP multivariado implementados e testados. |
 | 2026-09-22 | Comparação por estação | Concluído | Runners registram métricas por estação; comparador valida splits e contagens antes de gerar tabelas. |
+| 2026-09-23 | M4 multianual na Skat | Concluído | Early stopping na época 14; melhor época 4; teste: RMSE 0,53957, MAE 0,10985, Bias +0,01868. |
