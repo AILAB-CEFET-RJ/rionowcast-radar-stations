@@ -52,7 +52,8 @@ RESUME_CONFIG_KEYS = (
     "target_source", "loss", "huber_delta", "loss_weights", "sampler_thresholds",
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
-    "stconvs2s_commit",
+    "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
+    "mapping_height_orig", "mapping_width_orig", "crop",
 )
 
 
@@ -107,6 +108,21 @@ def parse_arguments() -> argparse.Namespace:
         help="Clone limpo e fixado do repositório da arquitetura (submódulo por padrão).",
     )
     parser.add_argument("--dataset-root", type=Path, required=True)
+    parser.add_argument(
+        "--crop-stations", action="store_true",
+        help="Recorta radar e targets para o retângulo das estações AlertaRio com margem.",
+    )
+    parser.add_argument(
+        "--crop-margin-pixels", type=int, default=20,
+        help="Margem espacial do crop de estações, em pixels da grade do dataset.",
+    )
+    parser.add_argument(
+        "--station-mapping", type=Path,
+        default=PROJECT_ROOT / "data" / "mapeamento_pixel_estacao_alertario.csv",
+        help="CSV com pixel_i/pixel_j das estações no grid original do radar.",
+    )
+    parser.add_argument("--mapping-height-orig", type=int, default=656)
+    parser.add_argument("--mapping-width-orig", type=int, default=654)
     parser.add_argument("--train-years", required=True)
     parser.add_argument("--val-years", required=True)
     parser.add_argument("--test-years", required=True)
@@ -590,8 +606,9 @@ def main() -> None:
             or args.iterations <= 0 or args.step <= 0
             or args.gradient_accumulation_steps <= 0 or args.log_interval < 0
             or args.prefetch_factor <= 0 or args.checkpoint_every <= 0
+            or args.crop_margin_pixels < 0 or args.mapping_height_orig <= 0 or args.mapping_width_orig <= 0
             or (args.stride is not None and args.stride <= 0)):
-        raise ValueError("epochs, patience, batch-size, iterations, step, stride, gradient-accumulation-steps, prefetch-factor e checkpoint-every devem ser positivos; workers e log-interval nao podem ser negativos.")
+        raise ValueError("Parâmetros de treino e dimensões do mapeamento devem ser positivos; workers, log-interval e crop-margin-pixels não podem ser negativos.")
     if args.persistent_workers and not args.workers:
         raise ValueError("--persistent-workers requer --workers maior que zero.")
 
@@ -616,7 +633,6 @@ def main() -> None:
         if args.run_name and args.run_name != run_dir.name:
             raise ValueError("--run-name deve corresponder ao diretorio do checkpoint ao usar --resume.")
         resume_state = torch.load(resume_path, map_location="cpu", weights_only=False)
-        validate_resume_checkpoint(resume_state, configuration, world_size)
         if resume_state.get("iteration") != 0:
             raise ValueError("--resume suporta somente checkpoints da primeira iteracao na versao atual.")
         if is_main(rank):
@@ -630,12 +646,33 @@ def main() -> None:
         dist.barrier()
     datasets = (
         RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
-                                  target_source=args.target_source, split_name="train"),
+                                  target_source=args.target_source, split_name="train",
+                                  crop_stations=args.crop_stations,
+                                  crop_margin_pixels=args.crop_margin_pixels,
+                                  station_mapping=args.station_mapping,
+                                  mapping_height_orig=args.mapping_height_orig,
+                                  mapping_width_orig=args.mapping_width_orig),
         RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.stride or args.step,
-                                  target_source=args.target_source, split_name="val"),
+                                  target_source=args.target_source, split_name="val",
+                                  crop_stations=args.crop_stations,
+                                  crop_margin_pixels=args.crop_margin_pixels,
+                                  station_mapping=args.station_mapping,
+                                  mapping_height_orig=args.mapping_height_orig,
+                                  mapping_width_orig=args.mapping_width_orig),
         RadarStationMemmapDataset(args.dataset_root, test_years, stride=args.stride or args.step,
-                                  target_source=args.target_source, split_name="test"),
+                                  target_source=args.target_source, split_name="test",
+                                  crop_stations=args.crop_stations,
+                                  crop_margin_pixels=args.crop_margin_pixels,
+                                  station_mapping=args.station_mapping,
+                                  mapping_height_orig=args.mapping_height_orig,
+                                  mapping_width_orig=args.mapping_width_orig),
     )
+    crop_metadata = datasets[0].crop_metadata
+    if any(dataset.crop_metadata != crop_metadata for dataset in datasets[1:]):
+        raise ValueError("O crop calculado difere entre os splits.")
+    configuration["crop"] = crop_metadata
+    if resume_state is not None:
+        validate_resume_checkpoint(resume_state, configuration, world_size)
     if is_main(rank) and resume_state is None:
         with (run_dir / "configuration.json").open("w", encoding="utf-8") as file:
             json.dump(configuration, file, indent=2)

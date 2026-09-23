@@ -67,8 +67,27 @@ disco sem alterar a arquitetura STConvS2S.
   maior em GPUs com VRAM limitada.
 - [x] Implementar retomada V1 entre épocas, com checkpoint atômico do último
   estado, otimizador, early stopping, histórico e estados aleatórios.
+- [x] Implementar crop dinâmico da região das estações AlertaRio, sem duplicar
+  os memmaps, com margem configurável e metadados no experimento.
 - [ ] Registrar no log a distribuição efetivamente sorteada pelo sampler em
   cada época.
+
+### Região Das Estações E Baselines
+
+O crop é derivado de `data/mapeamento_pixel_estacao_alertario.csv`, convertido
+para a resolução do dataset e expandido por uma margem em pixels. O runner usa
+`--crop-stations --crop-margin-pixels 20` para ativá-lo; a configuração salva
+os limites efetivos, dimensão e quantidade de estações. Os targets esparsos
+são filtrados e reindexados em memória, mantendo o dataset original intacto.
+
+- [x] Crop dinâmico de radar, targets e máscara para a região das estações.
+- [x] Garantir compatibilidade do crop com o sampler balanceado e com
+  checkpoints retomáveis.
+- [ ] Executar M2 e M4 equivalentes usando o crop, com o mesmo split temporal.
+- [ ] Implementar persistência por estação como baseline sem radar.
+- [ ] Implementar modelo temporal multivariado somente com estações.
+- [ ] Comparar os três modelos nos mesmos pares timestamp/estação/horizonte,
+  incluindo métricas por intensidade e por estação.
 
 ### Matriz Experimental
 
@@ -116,3 +135,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-20 | Dataset esparso na Arietis | Concluído | Dataset 128x128 reconstruído e validado para 2012-2024, com 18 GiB. |
 | 2026-09-20 | Auditoria do treino | Concluído | 513 janelas extremas, equivalentes a 0,8565% das 59.897 janelas. |
 | 2026-09-21 | Retomada V1 | Concluído | `iteration_1_last.pt` permite retomar na próxima época após interrupção; validada por testes unitários. |
+| 2026-09-22 | Crop da região das estações | Concluído | Crop dinâmico por CSV de mapeamento, com margem configurável e testes de preservação das observações. |
