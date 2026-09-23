@@ -17,6 +17,8 @@ external/stconvs2s/ submodulo com a arquitetura neural
 
 As regras para dados, memmaps, CSVs, checkpoints e figuras estao em
 [`docs/ORGANIZACAO_DADOS_E_RESULTADOS.md`](docs/ORGANIZACAO_DADOS_E_RESULTADOS.md).
+O uso futuro da rede WebSirene depende da auditoria documentada em
+[`docs/CONTROLE_QUALIDADE_WEBSIRENE.md`](docs/CONTROLE_QUALIDADE_WEBSIRENE.md).
 
 ## Instalacao
 

@@ -28,3 +28,11 @@ apenas quando houver uma necessidade especifica de narrativa ou figuras.
 - Nao use o notebook para gerar datasets de treinamento; mantenha essa etapa
   em scripts versionados.
 - Limpe saidas pesadas antes de versionar um notebook.
+
+## Mapas Das Redes
+
+- `02_geospatial/01_mapa_estacoes_alertario.ipynb`: distribuicao e pixels da
+  rede AlertaRio.
+- `02_geospatial/02_mapa_redes_pluviometricas.ipynb`: camadas Folium para
+  AlertaRio e WebSirene, com nomes selecionaveis e verificacao de pixels
+  compartilhados na grade `128 x 128`.

@@ -31,3 +31,9 @@ migrados para `outputs/analysis/websirene/`. O mapa de distribuicao das
 estacoes AlertaRio e salvo em `outputs/analysis/geospatial/`. Novas execucoes
 devem escrever nesses locais ou em um subdiretorio equivalente da fonte
 analisada.
+
+A auditoria reproduzivel WebSirene grava Parquets em
+`data/processed/websirene_qc/<versao>/` e relatórios em
+`outputs/analysis/websirene/qc/<versao>/`. Consulte
+[`CONTROLE_QUALIDADE_WEBSIRENE.md`](CONTROLE_QUALIDADE_WEBSIRENE.md) antes de
+usar esta fonte como supervisao.
