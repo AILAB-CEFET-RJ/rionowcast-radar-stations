@@ -13,8 +13,23 @@ def parse_args():
         description="Gera Y_all e M_all das estações WebSirene em memmap, alinhados aos timestamps do radar."
     )
 
-    parser.add_argument("--ws-root", type=Path, required=True)
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
+        "--ws-root",
+        type=Path,
+        help="Raiz bruta WebSirene. Mantem o corte legado de 50 mm/15min.",
+    )
+    source_group.add_argument(
+        "--qc-root",
+        type=Path,
+        help="Raiz auditada pelo nowcasting-audit-websirene; usa apenas qc_status=accepted.",
+    )
     parser.add_argument("--mapping", type=Path, required=True)
+    parser.add_argument(
+        "--station-whitelist",
+        type=Path,
+        help="CSV da auditoria com a coluna station_id; aplica somente a esta fonte.",
+    )
     parser.add_argument("--radar-root", type=Path, required=True)
 
     parser.add_argument("--year-start", type=int, required=True)
@@ -66,8 +81,10 @@ def process_year(args, year):
     removed_qc = 0
 
     for station_id in range(args.station_start, args.station_end + 1):
+        if args.station_whitelist_ids is not None and station_id not in args.station_whitelist_ids:
+            continue
         path = (
-            args.ws_root
+            (args.qc_root or args.ws_root)
             / f"station_id={station_id}"
             / f"year={year}"
             / "data.parquet"
@@ -78,18 +95,22 @@ def process_year(args, year):
 
         df = pd.read_parquet(path)
 
-        df = df[
-            [
-                "id",
-                "nome",
-                "latitude",
-                "longitude",
-                "observation_datetime",
-                "m15",
-            ]
-        ].copy()
+        required_columns = ["nome", "latitude", "longitude", "observation_datetime", "m15"]
+        missing_columns = set(required_columns) - set(df.columns)
+        if missing_columns:
+            raise ValueError(f"{path}: colunas ausentes: {sorted(missing_columns)}")
+        if args.qc_root:
+            if "qc_status" not in df:
+                raise ValueError(f"{path}: esperado qc_status em fonte auditada.")
+            df = df.loc[df["qc_status"] == "accepted"].copy()
+            if "station_id" not in df:
+                df["station_id"] = station_id
+        else:
+            df = df.rename(columns={"id": "station_id"})
+            if "station_id" not in df:
+                df["station_id"] = station_id
 
-        df = df.rename(columns={"id": "station_id"})
+        df = df[["station_id", *required_columns]].copy()
 
         df["observation_datetime"] = pd.to_datetime(
             df["observation_datetime"],
@@ -99,9 +120,9 @@ def process_year(args, year):
         df = df.dropna(subset=["m15"])
 
         before_qc = len(df)
-        df = df[(df["m15"] >= 0) & (df["m15"] <= MAX_M15)]
-        #df = df[df["m15"] <= MAX_M15]
-        removed_qc += before_qc - len(df)
+        if args.qc_root is None:
+            df = df[(df["m15"] >= 0) & (df["m15"] <= MAX_M15)]
+            removed_qc += before_qc - len(df)
 
         df["observation_datetime"] = (
             df["observation_datetime"]
@@ -212,8 +233,11 @@ def process_year(args, year):
         "Y_dtype": "float32",
         "M_dtype": "uint8",
         "mask": "1 where station observation exists",
-        "quality_control": "removed values above 50 mm/15min",
-        "max_m15_allowed": MAX_M15,
+        "quality_control": (
+            "accepted observations from WebSirene QC" if args.qc_root else "removed values above 50 mm/15min"
+        ),
+        "qc_source_root": str(args.qc_root) if args.qc_root else None,
+        "max_m15_allowed": None if args.qc_root else MAX_M15,
         "removed_qc_rows": int(removed_qc),
         "used_rows": int(used_rows),
         "skipped_rows_timestamp_absent": int(skipped_rows),
@@ -230,7 +254,8 @@ def process_year(args, year):
     print(f"[{year}] Observações: {int(M_all.sum())}", flush=True)
     print(f"[{year}] Linhas usadas: {used_rows}", flush=True)
     print(f"[{year}] Linhas ignoradas por timestamp ausente: {skipped_rows}", flush=True)
-    print(f"[{year}] Linhas removidas QC (>50 mm/15min): {removed_qc}", flush=True)
+    if args.qc_root is None:
+        print(f"[{year}] Linhas removidas QC (>50 mm/15min): {removed_qc}", flush=True)
     print(f"[{year}] Máximo salvo em log1p: {float(Y_all.max()):.4f}", flush=True)
     print(f"[{year}] Equivalente em mm/15min: {float(np.expm1(Y_all.max())):.2f}", flush=True)
 
@@ -240,10 +265,21 @@ def process_year(args, year):
 
 def main():
     args = parse_args()
+    if args.station_whitelist and args.qc_root is None:
+        raise ValueError("--station-whitelist requer --qc-root.")
+    if args.station_whitelist:
+        whitelist = pd.read_csv(args.station_whitelist)
+        if "station_id" not in whitelist:
+            raise ValueError("--station-whitelist precisa conter a coluna station_id.")
+        args.station_whitelist_ids = set(pd.to_numeric(whitelist["station_id"], errors="raise").astype(int))
+    else:
+        args.station_whitelist_ids = None
 
     print("=== CONFIGURAÇÃO ===", flush=True)
     print("ws_root:", args.ws_root, flush=True)
+    print("qc_root:", args.qc_root, flush=True)
     print("mapping:", args.mapping, flush=True)
+    print("station_whitelist:", args.station_whitelist, flush=True)
     print("radar_root:", args.radar_root, flush=True)
     print("year_start:", args.year_start, flush=True)
     print("year_end:", args.year_end, flush=True)

@@ -1,0 +1,18 @@
+{
+  "version": "v1",
+  "temporal_resolution_minutes": 15,
+  "thresholds": {
+    "expected_interval_minutes": 5,
+    "gap_multiplier": 6,
+    "constant_run_length": 12,
+    "constant_value_min_mm": 0.1,
+    "suspect_m15_mm": 50.0,
+    "reject_m15_mm": 175.0
+  },
+  "station_acceptance": {
+    "min_accepted_observations": 1000,
+    "min_years_with_accepted_data": 3,
+    "max_rejected_fraction": 0.01,
+    "max_suspect_fraction": 0.01
+  }
+}

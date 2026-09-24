@@ -18,6 +18,8 @@ treino, validação e teste.
 - [x] Dataset de radar `128 x 128` disponível e validado para 2012-2024.
 - [x] Targets AlertaRio esparsos `128 x 128` disponíveis e validados para
   2012-2024.
+- [x] Séries históricas originais AlertaRio e WebSirenes recebidas e
+  separadas dos datasets derivados.
 - [x] Loader compatível com `targets_alertario_sparse.npz` e com o formato
   denso legado.
 - [x] Primeiro experimento com split temporal multianual concluído (M1).
@@ -52,6 +54,36 @@ O formato esparso elimina os memmaps densos `Y_alertario.dat` e
 `M_alertario.dat` do dataset final. O loader reconstrói somente a janela alvo
 do batch, preservando a interface das losses mascaradas e reduzindo o uso de
 disco sem alterar a arquitetura STConvS2S.
+
+### WebSirene
+
+- [x] Mapear conjuntamente AlertaRio, WebSirene, grade do radar e crop das
+  estações em notebook geoespacial.
+- [x] Implementar auditoria versionada por observação WebSirene, com flags,
+  resumo por estação, whitelist preliminar e Parquets processados separados da
+  fonte bruta.
+- [x] Implementar comparação temporal opcional entre WebSirene auditado e
+  AlertaRio próximo.
+- [ ] Executar a auditoria V1 sobre os Parquets reais, revisar os eventos
+  suspeitos e validar a whitelist.
+- [ ] Gerar targets WebSirene somente a partir da whitelist auditada e executar
+  um smoke test antes de adicioná-los a qualquer experimento comparativo.
+
+O protocolo, limiares iniciais e comandos estão documentados em
+[`CONTROLE_QUALIDADE_WEBSIRENE.md`](CONTROLE_QUALIDADE_WEBSIRENE.md). A rede
+WebSirene não deve ser usada como supervisão até a conclusão dos dois itens
+pendentes acima.
+
+### Proveniência AlertaRio
+
+- [x] Identificar divergência entre o mapeamento atual das estações e os
+  targets esparsos legados.
+- [x] Implementar auditoria dos Parquets originais, incluindo a sentinela
+  `-99,99` para ausências.
+- [x] Implementar gerador de targets esparsos com `station_id`, hash do
+  mapeamento e contagens de controle de qualidade.
+- [ ] Executar a auditoria V1 e regenerar uma raiz de dataset AlertaRio V2.
+- [ ] Repetir B1 e executar o MLP somente contra os targets com proveniência.
 
 ### Código
 
@@ -158,3 +190,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-22 | Baselines somente com estações | Concluído | Dataset temporal para 33 estações, persistência e MLP multivariado implementados e testados. |
 | 2026-09-22 | Comparação por estação | Concluído | Runners registram métricas por estação; comparador valida splits e contagens antes de gerar tabelas. |
 | 2026-09-23 | M4 multianual na Skat | Concluído | Early stopping na época 14; melhor época 4; teste: RMSE 0,53957, MAE 0,10985, Bias +0,01868. |
+| 2026-09-23 | Auditoria WebSirene V1 | Implementada | Flags, whitelist preliminar, comparação opcional com AlertaRio e testes sintéticos; aguarda execução sobre os dados reais. |

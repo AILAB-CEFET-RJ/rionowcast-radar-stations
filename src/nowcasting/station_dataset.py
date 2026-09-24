@@ -103,17 +103,31 @@ class StationSequenceDataset(Dataset):
             rows = np.asarray(sparse["row"], dtype=np.int64)
             columns = np.asarray(sparse["column"], dtype=np.int64)
             value = np.asarray(sparse["value"], dtype=np.float32)
+            station_id = (
+                np.asarray(sparse["station_id"], dtype=np.int64)
+                if "station_id" in sparse.files else None
+            )
         if not (len(frame) == len(rows) == len(columns) == len(value)):
             raise ValueError(f"{year}: arrays esparsos com comprimentos diferentes.")
+        if station_id is not None and len(station_id) != len(frame):
+            raise ValueError(f"{year}: station_id esparso com comprimento invalido.")
 
         station_index = {tuple(pixel): index for index, pixel in enumerate(self.station_pixels)}
+        station_id_index = {station_id: index for index, station_id in enumerate(self.station_ids)}
         values = np.zeros((shape[0], len(self.station_ids)), dtype=np.float32)
         masks = np.zeros((shape[0], len(self.station_ids)), dtype=np.float32)
-        for current_frame, row, column, current_value in zip(frame, rows, columns, value):
-            index = station_index.get((int(row), int(column)))
-            if index is not None:
-                values[current_frame, index] = current_value
-                masks[current_frame, index] = 1.0
+        if station_id is not None:
+            for current_frame, current_station_id, current_value in zip(frame, station_id, value):
+                index = station_id_index.get(int(current_station_id))
+                if index is not None:
+                    values[current_frame, index] = max(values[current_frame, index], current_value)
+                    masks[current_frame, index] = 1.0
+        else:
+            for current_frame, row, column, current_value in zip(frame, rows, columns, value):
+                index = station_index.get((int(row), int(column)))
+                if index is not None:
+                    values[current_frame, index] = current_value
+                    masks[current_frame, index] = 1.0
         self.year_data[year] = {"values": values, "masks": masks, "shape": np.asarray(shape[1:3])}
 
         n_possible = shape[0] - (self.t_in + self.t_out) + 1

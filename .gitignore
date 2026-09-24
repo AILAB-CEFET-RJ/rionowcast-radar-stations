@@ -204,7 +204,14 @@ cython_debug/
 tempCodeRunnerFile.py
 
 # Local datasets and experiment artifacts
+data/raw/
+data/interim/
+data/processed/
 data/datasets/
+data/pluviometricos_alertario/
+data/pluviometricos_websirenes/
+data/pluviometricos_alertario.zip
+data/pluviometricos_websirenes.zip
 outputs/
 
 # Ruff stuff:
