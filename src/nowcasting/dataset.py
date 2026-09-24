@@ -54,6 +54,7 @@ class RadarStationMemmapDataset(Dataset):
         split_name: str = "dataset",
         crop_stations: bool = False,
         crop_margin_pixels: int = 20,
+        input_stations: bool = False,
         station_mapping: str | Path | None = None,
         mapping_height_orig: int = 656,
         mapping_width_orig: int = 654,
@@ -67,6 +68,7 @@ class RadarStationMemmapDataset(Dataset):
         self.split_name = split_name
         self.crop_stations = crop_stations
         self.crop_margin_pixels = crop_margin_pixels
+        self.input_stations = input_stations
         self.station_mapping = Path(station_mapping) if station_mapping else None
         self.mapping_height_orig = mapping_height_orig
         self.mapping_width_orig = mapping_width_orig
@@ -217,6 +219,33 @@ class RadarStationMemmapDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
+    def _sparse_targets_to_dense(
+        self, data: dict[str, np.memmap | dict[str, np.ndarray]], start: int, end: int,
+        height: int, width: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Materialize only one temporal sparse-target slice for a sample."""
+        sparse = data["sparse"]
+        left = np.searchsorted(sparse["frame"], start, side="left")
+        right = np.searchsorted(sparse["frame"], end, side="left")
+        frames = sparse["frame"][left:right] - start
+        rows = sparse["row"][left:right]
+        columns = sparse["column"][left:right]
+        values = sparse["value"][left:right]
+        if self.crop_bounds is not None:
+            top, bottom, crop_left, crop_right = self.crop_bounds
+            inside = ((rows >= top) & (rows < bottom) &
+                      (columns >= crop_left) & (columns < crop_right))
+            frames = frames[inside]
+            rows = rows[inside] - top
+            columns = columns[inside] - crop_left
+            values = values[inside]
+
+        targets = np.zeros((end - start, height, width, 1), dtype=np.float32)
+        masks = np.zeros_like(targets)
+        targets[frames, rows, columns, 0] = values
+        masks[frames, rows, columns, 0] = 1.0
+        return targets, masks
+
     def __getitem__(self, index: int):
         year, start = self.samples[index]
         data = self.year_data[year]
@@ -225,27 +254,23 @@ class RadarStationMemmapDataset(Dataset):
         row_slice, column_slice = self._crop_slices()
         x = np.array(data["frames"][start:x_end, row_slice, column_slice], dtype=np.float32) / 255.0
         if "sparse" in data:
-            sparse = data["sparse"]
-            left = np.searchsorted(sparse["frame"], x_end, side="left")
-            right = np.searchsorted(sparse["frame"], y_end, side="left")
-            y = np.zeros((self.t_out, x.shape[1], x.shape[2], 1), dtype=np.float32)
-            m = np.zeros_like(y)
-            frames = sparse["frame"][left:right] - x_end
-            rows, columns = sparse["row"][left:right], sparse["column"][left:right]
-            if self.crop_bounds is not None:
-                top, bottom, crop_left, crop_right = self.crop_bounds
-                inside = ((rows >= top) & (rows < bottom) &
-                          (columns >= crop_left) & (columns < crop_right))
-                frames, rows, columns = frames[inside], rows[inside] - top, columns[inside] - crop_left
-            if self.crop_bounds is not None:
-                values = sparse["value"][left:right][inside]
-            else:
-                values = sparse["value"][left:right]
-            y[frames, rows, columns, 0] = values
-            m[frames, rows, columns, 0] = 1.0
+            y, m = self._sparse_targets_to_dense(data, x_end, y_end, x.shape[1], x.shape[2])
+            if self.input_stations:
+                station_values, station_masks = self._sparse_targets_to_dense(
+                    data, start, x_end, x.shape[1], x.shape[2]
+                )
         else:
             y = np.array(data["targets"][x_end:y_end, row_slice, column_slice], dtype=np.float32)
             m = np.array(data["masks"][x_end:y_end, row_slice, column_slice], dtype=np.float32)
+            if self.input_stations:
+                station_values = np.array(
+                    data["targets"][start:x_end, row_slice, column_slice], dtype=np.float32
+                )
+                station_masks = np.array(
+                    data["masks"][start:x_end, row_slice, column_slice], dtype=np.float32
+                )
+        if self.input_stations:
+            x = np.concatenate((x, station_values, station_masks), axis=-1)
         return (
             torch.from_numpy(x).permute(3, 0, 1, 2),
             torch.from_numpy(y).permute(3, 0, 1, 2),

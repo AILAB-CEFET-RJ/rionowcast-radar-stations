@@ -54,10 +54,10 @@ def create_sparse_year(root: Path, year: int) -> None:
     radar.flush()
     np.savez(
         year_dir / "targets_alertario_sparse.npz",
-        frame=np.array([5, 5], dtype=np.int32),
-        row=np.array([0, 1], dtype=np.uint16),
-        column=np.array([0, 1], dtype=np.uint16),
-        value=np.array([np.log1p(2.0), np.log1p(20.0)], dtype=np.float32),
+        frame=np.array([1, 5, 5], dtype=np.int32),
+        row=np.array([0, 0, 1], dtype=np.uint16),
+        column=np.array([0, 0, 1], dtype=np.uint16),
+        value=np.array([np.log1p(1.0), np.log1p(2.0), np.log1p(20.0)], dtype=np.float32),
     )
     with (year_dir / "metadata.json").open("w", encoding="utf-8") as file:
         json.dump({"shape": list(shape_radar), "dtype": "uint8"}, file)
@@ -122,6 +122,22 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertEqual(tuple(y.shape), (1, 5, 1, 1))
             self.assertEqual(int(mask.sum()), 1)
             self.assertAlmostEqual(y[0, 0, 0, 0].item(), np.log1p(2.0))
+
+    def test_station_history_adds_value_and_mask_input_channels(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            dataset = RadarStationMemmapDataset(
+                root, [2020], stride=5, split_name="fusion", input_stations=True,
+            )
+            x, y, mask = dataset[0]
+
+            self.assertEqual(tuple(x.shape), (5, 5, 2, 2))
+            self.assertAlmostEqual(x[3, 1, 0, 0].item(), np.log1p(1.0))
+            self.assertEqual(x[4, 1, 0, 0].item(), 1.0)
+            self.assertEqual(x[4, 0, 0, 0].item(), 0.0)
+            self.assertAlmostEqual(y[0, 0, 0, 0].item(), np.log1p(2.0))
+            self.assertEqual(int(mask.sum()), 2)
 
     def test_station_sequence_dataset_and_model_use_values_and_masks(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
