@@ -18,6 +18,8 @@ treino, validação e teste.
 - [x] Dataset de radar `128 x 128` disponível e validado para 2012-2024.
 - [x] Targets AlertaRio esparsos `128 x 128` disponíveis e validados para
   2012-2024.
+- [x] Séries históricas originais AlertaRio e WebSirenes recebidas e
+  separadas dos datasets derivados.
 - [x] Loader compatível com `targets_alertario_sparse.npz` e com o formato
   denso legado.
 - [x] Primeiro experimento com split temporal multianual concluído (M1).
@@ -71,6 +73,17 @@ O protocolo, limiares iniciais e comandos estão documentados em
 [`CONTROLE_QUALIDADE_WEBSIRENE.md`](CONTROLE_QUALIDADE_WEBSIRENE.md). A rede
 WebSirene não deve ser usada como supervisão até a conclusão dos dois itens
 pendentes acima.
+
+### Proveniência AlertaRio
+
+- [x] Identificar divergência entre o mapeamento atual das estações e os
+  targets esparsos legados.
+- [x] Implementar auditoria dos Parquets originais, incluindo a sentinela
+  `-99,99` para ausências.
+- [x] Implementar gerador de targets esparsos com `station_id`, hash do
+  mapeamento e contagens de controle de qualidade.
+- [ ] Executar a auditoria V1 e regenerar uma raiz de dataset AlertaRio V2.
+- [ ] Repetir B1 e executar o MLP somente contra os targets com proveniência.
 
 ### Código
 

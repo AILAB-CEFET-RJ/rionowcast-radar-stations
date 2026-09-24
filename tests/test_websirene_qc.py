@@ -11,6 +11,7 @@ from nowcasting.websirene_qc import (
     merge_config,
     nearest_reference_stations,
     paired_metrics,
+    repair_mojibake,
     station_summary,
 )
 from nowcasting.station_geometry import direct_resampled_pixels, sparse_target_pixels
@@ -60,6 +61,22 @@ class WebSireneQualityControlTests(unittest.TestCase):
 
         summary = station_summary(audited, self.config)
         self.assertEqual(summary.loc[0, "station_status"], "approved")
+
+    def test_repair_mojibake_preserves_normal_text(self) -> None:
+        self.assertEqual(repair_mojibake("SumarÃ© 1"), "Sumaré 1")
+        self.assertEqual(repair_mojibake("Grajaú"), "Grajaú")
+
+        audited = audit_observations(
+            pd.DataFrame({
+                "nome": ["PiancÃ³ 2"],
+                "observation_datetime": ["2024-01-01T00:00:00Z"],
+                "m15": [0.0],
+            }),
+            station_id=1,
+            year=2024,
+            config=self.config,
+        )
+        self.assertEqual(audited.loc[0, "nome"], "Piancó 2")
 
     def test_nearest_reference_pair_and_metrics(self) -> None:
         web = pd.DataFrame(

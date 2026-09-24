@@ -43,6 +43,18 @@ SUSPECT_FLAGS = {
     "m15_above_suspect_threshold",
 }
 
+MOJIBAKE_MARKERS = ("Ã", "Â", "â")
+
+
+def repair_mojibake(value: object) -> object:
+    """Repair common UTF-8-as-Latin-1 text corruption without touching normal text."""
+    if not isinstance(value, str) or not any(marker in value for marker in MOJIBAKE_MARKERS):
+        return value
+    try:
+        return value.encode("latin-1").decode("utf-8")
+    except UnicodeError:
+        return value
+
 
 def merge_config(base: dict, override: dict) -> dict:
     """Recursively merge a user configuration into the audited defaults."""
@@ -113,6 +125,8 @@ def audit_observations(frame: pd.DataFrame, station_id: int, year: int, config: 
         raise ValueError(f"WebSirene: colunas ausentes: {sorted(missing)}")
 
     audited = frame.copy().reset_index(drop=True)
+    if "nome" in audited:
+        audited["nome"] = audited["nome"].map(repair_mojibake)
     audited["station_id"] = station_id
     audited["year"] = year
     audited["observation_datetime"] = pd.to_datetime(

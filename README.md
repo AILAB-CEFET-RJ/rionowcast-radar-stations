@@ -19,6 +19,8 @@ As regras para dados, memmaps, CSVs, checkpoints e figuras estao em
 [`docs/ORGANIZACAO_DADOS_E_RESULTADOS.md`](docs/ORGANIZACAO_DADOS_E_RESULTADOS.md).
 O uso futuro da rede WebSirene depende da auditoria documentada em
 [`docs/CONTROLE_QUALIDADE_WEBSIRENE.md`](docs/CONTROLE_QUALIDADE_WEBSIRENE.md).
+O procedimento de auditoria e regeneracao rastreavel dos targets AlertaRio esta
+em [`docs/CONTROLE_QUALIDADE_ALERTARIO.md`](docs/CONTROLE_QUALIDADE_ALERTARIO.md).
 
 ## Instalacao
 
