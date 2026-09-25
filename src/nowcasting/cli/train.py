@@ -55,7 +55,7 @@ RESUME_CONFIG_KEYS = (
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
-    "mapping_height_orig", "mapping_width_orig", "crop",
+    "mapping_height_orig", "mapping_width_orig", "input_stations", "crop",
 )
 
 
@@ -117,6 +117,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--crop-margin-pixels", type=int, default=20,
         help="Margem espacial do crop de estações, em pixels da grade do dataset.",
+    )
+    parser.add_argument(
+        "--input-stations", action="store_true",
+        help="Acrescenta chuva defasada e mascara de disponibilidade das estações à entrada.",
     )
     parser.add_argument(
         "--station-mapping", type=Path,
@@ -493,6 +497,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         f"Training batches | microbatch={args.batch_size} | "
         f"accumulation={args.gradient_accumulation_steps} | "
         f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}\n"
+        f"Input channels | radar=3 | stations={2 if args.input_stations else 0} | "
+        f"total={sample_x.shape[0]}\n"
         f"DataLoader | workers={args.workers} | pin_memory={args.pin_memory} | "
         f"persistent_workers={args.persistent_workers} | "
         f"prefetch_factor={args.prefetch_factor if args.workers else 'n/a'}",
@@ -702,6 +708,7 @@ def main() -> None:
                                   target_source=args.target_source, split_name="train",
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
+                                  input_stations=args.input_stations,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
@@ -709,6 +716,7 @@ def main() -> None:
                                   target_source=args.target_source, split_name="val",
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
+                                  input_stations=args.input_stations,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
@@ -716,6 +724,7 @@ def main() -> None:
                                   target_source=args.target_source, split_name="test",
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
+                                  input_stations=args.input_stations,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
