@@ -9,6 +9,7 @@ scipy
 pillow
 pyproj
 pyarrow
+pyshp
 joblib
 tqdm
 pytz

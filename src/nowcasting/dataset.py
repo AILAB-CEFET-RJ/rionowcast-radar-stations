@@ -74,6 +74,7 @@ class RadarStationMemmapDataset(Dataset):
         self.mapping_width_orig = mapping_width_orig
         self.crop_bounds: tuple[int, int, int, int] | None = None
         self.crop_metadata: dict[str, object] = {"enabled": False}
+        self.capture_preprocessing: dict[str, object] | None = None
         self.year_data: dict[int, dict[str, np.memmap]] = {}
         self.samples: list[tuple[int, int]] = []
         self._sample_class_cache: dict[tuple[float, ...], np.ndarray] = {}
@@ -170,6 +171,12 @@ class RadarStationMemmapDataset(Dataset):
             radar_metadata = json.load(file)
         with target_metadata_path.open(encoding="utf-8") as file:
             target_metadata = json.load(file)
+
+        capture_preprocessing = radar_metadata.get("capture_preprocessing")
+        if self.capture_preprocessing is None:
+            self.capture_preprocessing = capture_preprocessing
+        elif self.capture_preprocessing != capture_preprocessing:
+            raise ValueError(f"{year}: pré-processamento de captura difere entre anos.")
 
         radar_shape = tuple(radar_metadata["shape"])
         target_shape = tuple(target_metadata["shape"])

@@ -1,0 +1,28 @@
+{
+  "name": "radar_sumare_capture",
+  "version": 1,
+  "source_image": {
+    "width": 1024,
+    "height": 768,
+    "mode": "RGBA"
+  },
+  "reflectivity_crop": {
+    "left": 185,
+    "top": 56,
+    "right_exclusive": 839,
+    "bottom_exclusive": 712
+  },
+  "station_mapping_transform": {
+    "status": "provisional",
+    "legacy_grid": {
+      "height": 656,
+      "width": 654
+    },
+    "method": "identity_legacy_grid_matches_capture_crop",
+    "row_offset": 0,
+    "column_offset": 0,
+    "rationale": "O bitmap útil observado mede exatamente 656x654, a mesma geometria declarada pelo mapeamento legado. O recorte remove margens pretas e overlays sem reescalar os pixels das estações."
+  },
+  "description": "Recorte do bitmap útil de refletividade (656x654). Remove timestamp superior, legenda/menu à esquerda e margens pretas das capturas PNG do radar Sumaré.",
+  "evidence": "outputs/analysis/radar_sumare/capture_audit_v1"
+}

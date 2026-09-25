@@ -11,6 +11,8 @@ evitar gravar resultados grandes no proprio arquivo.
 - `02_geospatial/`: mapas, cobertura espacial e verificacoes geograficas.
 - `03_modeling/`: materiais didaticos sobre o dataset, os tensores e os
   modelos de nowcasting.
+- `04_operations/`: demonstracoes reprodutiveis do caminho entre capturas,
+  inferencia e produto operacional.
 - `archive/`: notebooks historicos mantidos apenas para rastreabilidade. Eles
   podem referenciar datasets, dependencias ou caminhos que nao fazem parte do
   pipeline atual.
@@ -50,3 +52,11 @@ apenas quando houver uma necessidade especifica de narrativa ou figuras.
   split por anos e regras para evitar vazamento.
 - `03_modeling/04_balanceamento_eventos_extremos.ipynb`: distribuicao de
   intensidades, sampler balanceado e repeticao esperada de eventos raros.
+
+## Operacao
+
+- `04_operations/01_inferencia_e_produto_operacional.ipynb`: seleciona um
+  evento real, inspeciona os cinco frames agregados de entrada e oferece um
+  mock deterministico por persistencia nas estacoes para demonstracao, na ROI
+  cropada e em um mapa Folium por horizonte. Tambem documenta o contrato
+  necessario para executar previsoes com checkpoint compativel.

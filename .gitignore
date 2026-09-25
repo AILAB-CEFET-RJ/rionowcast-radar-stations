@@ -208,6 +208,7 @@ data/raw/
 data/interim/
 data/processed/
 data/datasets/
+data/radar_sumare/
 data/pluviometricos_alertario/
 data/pluviometricos_websirenes/
 data/pluviometricos_alertario.zip
