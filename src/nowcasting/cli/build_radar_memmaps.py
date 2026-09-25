@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from nowcasting.radar_capture import load_capture_config, load_reflectivity_rgb
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -25,6 +27,14 @@ def parse_args():
     parser.add_argument("--height", type=int, default=256)
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--min-frames-per-window", type=int, default=3)
+    parser.add_argument(
+        "--capture-config",
+        type=Path,
+        help=(
+            "JSON versionado com a geometria do PNG e o recorte do bitmap de "
+            "refletividade. Sem esta opção, preserva o pré-processamento legado."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -93,17 +103,13 @@ def collect_files_for_year(data_root: Path, year: int):
     return sorted(best_by_timestamp.items(), key=lambda x: x[0])
 
 
-def load_radar_image_rgb(path: Path, width: int, height: int) -> np.ndarray:
-    with Image.open(path) as img:
-        img = img.convert("RGBA")
-        arr = np.array(img, dtype=np.uint8)
-
-    rgb = arr[:, :, :3]
-    alpha = arr[:, :, 3]
-
-    mask = alpha > 0
-    rgb = rgb * mask[:, :, None]
-
+def load_radar_image_rgb(
+    path: Path,
+    width: int,
+    height: int,
+    capture_config: dict | None = None,
+) -> np.ndarray:
+    rgb = load_reflectivity_rgb(path, capture_config)
     rgb_img = Image.fromarray(rgb, mode="RGB")
     rgb_img = rgb_img.resize((width, height), Image.NEAREST)
 
@@ -129,6 +135,7 @@ def process_year(
     height: int,
     width: int,
     min_frames_per_window: int,
+    capture_config: dict | None,
 ):
     print("\n" + "=" * 60, flush=True)
     print(f"INICIANDO ANO {year}", flush=True)
@@ -189,6 +196,7 @@ def process_year(
                     path,
                     width=width,
                     height=height,
+                    capture_config=capture_config,
                 )
             except Exception as e:
                 invalid_count += 1
@@ -260,6 +268,7 @@ def process_year(
         "ignored_windows": ignored_windows,
         "estimated_frames": n_frames_estimado,
         "final_frames": n_frames_final,
+        "capture_preprocessing": capture_config,
     }
 
     with open(metadata_path, "w", encoding="utf-8") as f:
@@ -274,6 +283,9 @@ def process_year(
 
 def main():
     args = parse_args()
+    capture_config = (
+        load_capture_config(args.capture_config) if args.capture_config else None
+    )
 
     args.output_root.mkdir(parents=True, exist_ok=True)
 
@@ -284,6 +296,7 @@ def main():
     print("year_end:", args.year_end, flush=True)
     print("aggregate_minutes:", args.aggregate_minutes, flush=True)
     print("resize:", (args.height, args.width), flush=True)
+    print("capture_config:", args.capture_config, flush=True)
 
     for year in range(args.year_start, args.year_end + 1):
         process_year(
@@ -294,6 +307,7 @@ def main():
             height=args.height,
             width=args.width,
             min_frames_per_window=args.min_frames_per_window,
+            capture_config=capture_config,
         )
 
     print("\nTODOS OS ANOS FINALIZADOS.", flush=True)

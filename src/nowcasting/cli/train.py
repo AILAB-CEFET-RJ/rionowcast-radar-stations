@@ -56,6 +56,7 @@ RESUME_CONFIG_KEYS = (
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
     "mapping_height_orig", "mapping_width_orig", "input_stations", "crop",
+    "radar_capture_preprocessing",
 )
 
 
@@ -733,6 +734,7 @@ def main() -> None:
     if any(dataset.crop_metadata != crop_metadata for dataset in datasets[1:]):
         raise ValueError("O crop calculado difere entre os splits.")
     configuration["crop"] = crop_metadata
+    configuration["radar_capture_preprocessing"] = datasets[0].capture_preprocessing
     if resume_state is not None:
         validate_resume_checkpoint(resume_state, configuration, world_size)
     if is_main(rank) and resume_state is None:
