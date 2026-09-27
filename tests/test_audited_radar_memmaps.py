@@ -14,12 +14,25 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from nowcasting.cli.build_radar_memmaps import collect_files_for_utc_year, process_year
+from nowcasting.cli.build_radar_memmaps import collect_files_for_utc_year, prepare_year_resume, process_year
 from nowcasting.dataset import RadarStationMemmapDataset
 from nowcasting.radar_timestamps import local_filename_timestamp_to_utc
 
 
 class AuditedRadarMemmapTests(unittest.TestCase):
+    def test_annual_resume_skips_finalized_year_and_restarts_only_partial_year(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            finalized = root / "year=2023"
+            finalized.mkdir()
+            self.assertTrue(prepare_year_resume(root, 2023, resume=True, restart_partial=False))
+
+            partial = root / "year=2024.partial"
+            partial.mkdir()
+            (partial / "incomplete").write_text("partial", encoding="utf-8")
+            self.assertFalse(prepare_year_resume(root, 2024, resume=True, restart_partial=True))
+            self.assertFalse(partial.exists())
+
     def test_historical_png_timezone_preserves_brazilian_dst(self) -> None:
         self.assertEqual(
             local_filename_timestamp_to_utc(datetime(2024, 1, 1, 12, 0), "America/Sao_Paulo"),

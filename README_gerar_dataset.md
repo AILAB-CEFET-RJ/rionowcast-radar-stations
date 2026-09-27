@@ -73,6 +73,11 @@ Para cada ano, sao produzidos `radar_frames.dat`, `radar_timestamps.npy` e
 [`docs/PIPELINE_RADAR_SUMARE_AUDITAVEL.md`](docs/PIPELINE_RADAR_SUMARE_AUDITAVEL.md)
 para os criterios de validacao e a limitacao conhecida da agregacao RGB.
 
+Para retomar uma geração longa, acrescente `--resume`: os diretórios anuais já
+publicados são preservados e ignorados. Se a interrupção deixar
+`year=AAAA.partial`, inspecione-o e repita com `--resume --restart-partial`;
+isso reconstrói apenas aquele ano parcial, sem tocar nos anos concluídos.
+
 Antes de gerar targets, a associacao entre estacoes e pixels deve ser validada.
 O contrato historico inclui um candidato geografico baseado no centro do radar
 e no raio operacional de 138,9 km, mas esse candidato nao deve ser usado em

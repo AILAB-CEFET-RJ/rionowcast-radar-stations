@@ -38,6 +38,22 @@ memmap usa somente janelas elegiveis, enquanto `window_coverage.csv` preserva
 todas as janelas previstas no calendario. `metadata.json` inclui hash da
 configuracao, estatisticas das fontes e `enforce_timestamp_continuity=true`.
 
+## Retomada da geração
+
+Uma publicação concluída em `year=AAAA/` é atômica. Após uma falha ou
+interrupção, repita o mesmo comando com `--resume`: anos já publicados serão
+ignorados. A retomada é por ano, não por frame. Portanto, se existir
+`year=AAAA.partial`, primeiro inspecione o conteúdo; quando decidir refazer
+esse único ano, use:
+
+```bash
+nowcasting-build-radar [mesmos argumentos] --resume --restart-partial
+```
+
+`--restart-partial` nunca remove um ano publicado e exige `--resume`. Não use
+`--overwrite` com `--resume`; `--overwrite` é reservado para substituir uma
+versão anual finalizada após validação deliberada.
+
 ## Continuidade temporal
 
 `RadarStationMemmapDataset` aplica continuidade apenas quando este marcador

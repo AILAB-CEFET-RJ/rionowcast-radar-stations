@@ -41,6 +41,14 @@ def parse_args() -> argparse.Namespace:
         help="Agregação de imagem. rgb-max preserva a série legada, mas não é grandeza física.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Substitui somente diretórios anuais já finalizados.")
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Pula anos já publicados e processa somente os anos ausentes.",
+    )
+    parser.add_argument(
+        "--restart-partial", action="store_true",
+        help="Remove e reconstrói um ano parcial; requer --resume.",
+    )
     return parser.parse_args()
 
 
@@ -155,6 +163,23 @@ def _atomic_publish(partial: Path, final: Path, overwrite: bool) -> None:
         os.replace(partial, final)
 
 
+def prepare_year_resume(
+    output_root: Path, year: int, resume: bool, restart_partial: bool,
+) -> bool:
+    """Apply annual resume policy and return whether the year must be skipped."""
+    final_dir = output_root / f"year={year}"
+    partial_dir = output_root / f"year={year}.partial"
+    if resume and final_dir.exists():
+        print(f"[{year}] já finalizado; pulando por --resume.", flush=True)
+        return True
+    if restart_partial and partial_dir.exists():
+        if not partial_dir.is_dir():
+            raise FileExistsError(f"Parcial não é diretório: {partial_dir}")
+        print(f"[{year}] removendo parcial para reconstrução solicitada: {partial_dir}", flush=True)
+        shutil.rmtree(partial_dir)
+    return False
+
+
 def process_year(
     year: int, data_root: Path, output_root: Path, aggregate_minutes: int,
     height: int, width: int, min_frames_per_window: int, capture_config: dict,
@@ -244,6 +269,10 @@ def main() -> None:
     args = parse_args()
     if args.year_start > args.year_end or args.aggregate_minutes <= 0 or args.min_frames_per_window <= 0:
         raise ValueError("Intervalo de anos, aggregate-minutes e min-frames-per-window devem ser positivos.")
+    if args.resume and args.overwrite:
+        raise ValueError("--resume e --overwrite são mutuamente exclusivos.")
+    if args.restart_partial and not args.resume:
+        raise ValueError("--restart-partial requer --resume.")
     config = load_capture_config(args.capture_config)
     temporal = config.get("temporal_alignment", {})
     source_timezone = temporal.get("png_filename_timezone")
@@ -253,6 +282,8 @@ def main() -> None:
     digest = _config_digest(args.capture_config)
     print(f"Contrato auditável | config_sha256={digest} | agregação={args.aggregation}", flush=True)
     for year in range(args.year_start, args.year_end + 1):
+        if prepare_year_resume(args.output_root, year, args.resume, args.restart_partial):
+            continue
         process_year(year, args.data_root, args.output_root, args.aggregate_minutes, args.height, args.width,
                      args.min_frames_per_window, config, digest, args.aggregation, args.overwrite, source_timezone)
 
