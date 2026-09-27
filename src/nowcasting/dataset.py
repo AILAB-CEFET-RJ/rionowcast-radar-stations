@@ -215,11 +215,36 @@ class RadarStationMemmapDataset(Dataset):
         n_possible = len(frames) - (self.t_in + self.t_out) + 1
         if n_possible <= 0:
             raise ValueError(f"{year}: frames insuficientes para as sequências configuradas.")
-        self.samples.extend((year, start) for start in range(0, n_possible, self.stride))
+        candidate_starts = range(0, n_possible, self.stride)
+        if radar_metadata.get("enforce_timestamp_continuity", False):
+            timestamps_path = year_dir / radar_metadata.get("timestamps_file", "radar_timestamps.npy")
+            if not timestamps_path.is_file():
+                raise FileNotFoundError(f"{year}: timestamps obrigatórios ausentes: {timestamps_path}")
+            raw_timestamps = np.load(timestamps_path, allow_pickle=False)
+            if len(raw_timestamps) != len(frames):
+                raise ValueError(f"{year}: {timestamps_path.name} tem {len(raw_timestamps)} timestamps para {len(frames)} frames.")
+            try:
+                minutes = np.asarray(raw_timestamps, dtype="datetime64[m]").astype(np.int64)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{year}: timestamps inválidos para auditoria temporal.") from error
+            expected_minutes = int(radar_metadata.get("aggregate_minutes", 15))
+            bad_edges = np.diff(minutes) != expected_minutes
+            prefix = np.concatenate(([0], np.cumsum(bad_edges, dtype=np.int64)))
+            sequence_length = self.t_in + self.t_out
+            candidate_starts = [
+                start for start in candidate_starts
+                if prefix[start + sequence_length - 1] == prefix[start]
+            ]
+            discarded = (len(range(0, n_possible, self.stride)) - len(candidate_starts))
+            if discarded:
+                print(f"[{self.split_name}] Ano {year} | descartadas {discarded} amostras que cruzam lacunas do radar", flush=True)
+        else:
+            candidate_starts = list(candidate_starts)
+        self.samples.extend((year, start) for start in candidate_starts)
         print(
             f"[{self.split_name}] Ano {year} carregado | fonte={self.target_source} | "
             f"frames={len(frames)} | shape={radar_shape} | "
-            f"amostras={len(range(0, n_possible, self.stride))}",
+            f"amostras={len(candidate_starts)}",
             flush=True,
         )
 
@@ -284,9 +309,10 @@ class RadarStationMemmapDataset(Dataset):
             torch.from_numpy(m).permute(3, 0, 1, 2),
         )
 
-    def get_balanced_sample_weights(
+    def get_sample_classes(
         self, thresholds: tuple[float, float, float] = (1.25, 6.25, 12.5)
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> np.ndarray:
+        """Classify each training window by the maximum future station rainfall."""
         thresholds = tuple(float(value) for value in thresholds)
         if thresholds not in self._sample_class_cache:
             classes = np.zeros(len(self.samples), dtype=np.int64)
@@ -312,8 +338,14 @@ class RadarStationMemmapDataset(Dataset):
                 if maximum is not None:
                     classes[index] = np.searchsorted(thresholds, maximum, side="right")
             self._sample_class_cache[thresholds] = classes
+        return self._sample_class_cache[thresholds].copy()
 
-        classes = self._sample_class_cache[thresholds]
+    def get_balanced_sample_weights(
+        self, thresholds: tuple[float, float, float] = (1.25, 6.25, 12.5)
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return inverse-frequency sample weights and their class counts."""
+        classes = self.get_sample_classes(thresholds)
+
         counts = np.bincount(classes, minlength=4).astype(np.int64)
         by_class = np.zeros(4, dtype=np.float64)
         by_class[counts > 0] = 1.0 / counts[counts > 0]
