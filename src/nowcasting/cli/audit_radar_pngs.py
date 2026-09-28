@@ -15,6 +15,7 @@ from nowcasting.cli.build_radar_memmaps import (
     _calendar_buckets,
     build_time_buckets,
     collect_files_for_year,
+    collect_files_for_utc_year,
 )
 from nowcasting.radar_capture import load_capture_config, load_reflectivity_rgb
 
@@ -89,7 +90,11 @@ def _preview(items: list[tuple[datetime, Path]], config: dict, output_dir: Path,
 def audit_year(args: argparse.Namespace, config: dict, year: int) -> dict[str, object]:
     year_dir = args.output_dir / f"year={year}"
     year_dir.mkdir(parents=True, exist_ok=True)
-    items, source_report = collect_files_for_year(args.data_root, year)
+    source_timezone = config.get("temporal_alignment", {}).get("png_filename_timezone")
+    if source_timezone:
+        items, source_report = collect_files_for_utc_year(args.data_root, year, source_timezone)
+    else:
+        items, source_report = collect_files_for_year(args.data_root, year)
     buckets = build_time_buckets(items, args.aggregate_minutes)
     coverage = _write_coverage(year_dir / "window_coverage.csv", year, args.aggregate_minutes, buckets, args.min_frames_per_window)
     verification = Counter()
@@ -116,6 +121,7 @@ def audit_year(args: argparse.Namespace, config: dict, year: int) -> dict[str, o
     result = {
         "year": year,
         "source_manifest": {**source_report, "unique_timestamps": len(items)},
+        "timestamp_convention": "utc" if source_timezone else "source_filename_naive",
         "coverage": coverage,
         "temporal_gaps_between_eligible_windows": _eligible_gaps(buckets, args.min_frames_per_window, args.aggregate_minutes),
         "image_verification": dict(verification),

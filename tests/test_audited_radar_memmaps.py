@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,13 +15,34 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from nowcasting.cli.audit_radar_pngs import _preview
+from nowcasting.cli.audit_radar_pngs import _preview, audit_year
 from nowcasting.cli.build_radar_memmaps import collect_files_for_utc_year, prepare_year_resume, process_year
 from nowcasting.dataset import RadarStationMemmapDataset
 from nowcasting.radar_timestamps import local_filename_timestamp_to_utc
 
 
 class AuditedRadarMemmapTests(unittest.TestCase):
+    def test_audit_uses_utc_year_for_historical_capture_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw = root / "raw" / "2023" / "12" / "31"
+            raw.mkdir(parents=True)
+            for minute in (0, 2, 4, 6, 8, 10):
+                Image.new("RGB", (1, 1)).save(raw / f"2023_12_31_23_{minute:02d}.png")
+            args = Namespace(
+                data_root=root / "raw", output_dir=root / "out", aggregate_minutes=15,
+                min_frames_per_window=6, verify_images=False, preview_count=0,
+            )
+            config = {
+                "source_image": {"width": 1, "height": 1},
+                "reflectivity_crop": {"left": 0, "top": 0, "right_exclusive": 1, "bottom_exclusive": 1},
+                "temporal_alignment": {"png_filename_timezone": "America/Sao_Paulo"},
+            }
+            result = audit_year(args, config, 2024)
+            self.assertEqual(result["timestamp_convention"], "utc")
+            self.assertEqual(result["source_manifest"]["unique_timestamps"], 6)
+            self.assertEqual(result["coverage"]["eligible_windows"], 1)
+
     def test_audit_preview_skips_corrupt_png(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
