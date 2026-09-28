@@ -14,12 +14,32 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from nowcasting.cli.audit_radar_pngs import _preview
 from nowcasting.cli.build_radar_memmaps import collect_files_for_utc_year, prepare_year_resume, process_year
 from nowcasting.dataset import RadarStationMemmapDataset
 from nowcasting.radar_timestamps import local_filename_timestamp_to_utc
 
 
 class AuditedRadarMemmapTests(unittest.TestCase):
+    def test_audit_preview_skips_corrupt_png(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            valid = root / "valid.png"
+            invalid = root / "invalid.png"
+            Image.new("RGB", (1, 1)).save(valid)
+            invalid.write_bytes(b"not a png")
+            config = {
+                "source_image": {"width": 1, "height": 1},
+                "reflectivity_crop": {"left": 0, "top": 0, "right_exclusive": 1, "bottom_exclusive": 1},
+            }
+            report = _preview(
+                [(datetime(2024, 1, 1), invalid), (datetime(2024, 1, 2), valid)],
+                config,
+                root / "out",
+                count=2,
+            )
+            self.assertEqual(report, {"invalid_images": 1, "written": 1})
+
     def test_annual_resume_skips_finalized_year_and_restarts_only_partial_year(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

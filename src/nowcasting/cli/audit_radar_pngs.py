@@ -58,17 +58,22 @@ def _eligible_gaps(buckets: dict[datetime, list], min_frames: int, minutes: int)
     return gaps
 
 
-def _preview(items: list[tuple[datetime, Path]], config: dict, output_dir: Path, count: int) -> None:
+def _preview(items: list[tuple[datetime, Path]], config: dict, output_dir: Path, count: int) -> dict[str, int]:
+    report = Counter()
     if not items or count <= 0:
-        return
+        return dict(report)
     preview_dir = output_dir / "previews"
-    preview_dir.mkdir(exist_ok=True)
+    preview_dir.mkdir(parents=True, exist_ok=True)
     indexes = np.linspace(0, len(items) - 1, min(count, len(items)), dtype=int)
     for index in indexes:
         timestamp, path = items[int(index)]
-        with Image.open(path) as image:
-            original = image.convert("RGB")
-        rgb = load_reflectivity_rgb(path, config)
+        try:
+            with Image.open(path) as image:
+                original = image.convert("RGB")
+            rgb = load_reflectivity_rgb(path, config)
+        except Exception:
+            report["invalid_images"] += 1
+            continue
         stem = preview_dir / f"{timestamp:%Y%m%dT%H%M}"
         original.save(stem.with_name(f"{stem.name}_original.png"))
         Image.fromarray(rgb, mode="RGB").save(stem.with_name(f"{stem.name}_crop.png"))
@@ -77,6 +82,8 @@ def _preview(items: list[tuple[datetime, Path]], config: dict, output_dir: Path,
         Image.fromarray(rgb, mode="RGB").resize(size, Image.NEAREST).save(
             stem.with_name(f"{stem.name}_{size[0]}x{size[1]}.png")
         )
+        report["written"] += 1
+    return dict(report)
 
 
 def audit_year(args: argparse.Namespace, config: dict, year: int) -> dict[str, object]:
@@ -86,20 +93,33 @@ def audit_year(args: argparse.Namespace, config: dict, year: int) -> dict[str, o
     buckets = build_time_buckets(items, args.aggregate_minutes)
     coverage = _write_coverage(year_dir / "window_coverage.csv", year, args.aggregate_minutes, buckets, args.min_frames_per_window)
     verification = Counter()
+    invalid_records: list[dict[str, str]] = []
     if args.verify_images:
-        for _, path in items:
+        for timestamp, path in items:
             try:
                 load_reflectivity_rgb(path, config)
                 verification["valid_images"] += 1
-            except Exception:
+            except Exception as error:
                 verification["invalid_images"] += 1
-    _preview(items, config, year_dir, args.preview_count)
+                verification[f"error_{type(error).__name__}"] += 1
+                invalid_records.append({
+                    "timestamp": timestamp.isoformat(),
+                    "path": str(path),
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                })
+        with (year_dir / "invalid_images.csv").open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=("timestamp", "path", "error_type", "error"))
+            writer.writeheader()
+            writer.writerows(invalid_records)
+    preview = _preview(items, config, year_dir, args.preview_count)
     result = {
         "year": year,
         "source_manifest": {**source_report, "unique_timestamps": len(items)},
         "coverage": coverage,
         "temporal_gaps_between_eligible_windows": _eligible_gaps(buckets, args.min_frames_per_window, args.aggregate_minutes),
         "image_verification": dict(verification),
+        "preview": preview,
     }
     (year_dir / "summary.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"[{year}] únicos={len(items)} | elegíveis={coverage['eligible_windows']} | lacunas={len(result['temporal_gaps_between_eligible_windows'])}", flush=True)
