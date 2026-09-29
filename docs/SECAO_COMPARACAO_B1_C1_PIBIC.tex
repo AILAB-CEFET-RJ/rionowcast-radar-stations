@@ -1,0 +1,59 @@
+% Inserir em "Resultados e Discussão", após a Tabela de desbalanceamento.
+% Requer apenas o pacote booktabs, já usado no template do relatório.
+
+\subsection{Avaliação preditiva: persistência versus radar}
+Para estabelecer uma referência operacional, foi avaliada a baseline B1 de persistência. Para cada estação, a baseline repete nos cinco horizontes futuros a última observação pluviométrica disponível. O experimento C1 emprega a arquitetura STConvS2S-C com os três canais RGB do radar do Sumaré como entrada e perda \textit{masked Huber}; nesta primeira configuração, o C1 não recebe a precipitação passada das estações como variável de entrada.
+
+Os dois experimentos foram avaliados sobre exatamente as mesmas 9.261 sequências de teste, correspondentes a 1.526.562 pares válidos estação--tempo nos anos de 2023--2024. A equivalência foi assegurada pela exclusão, nos dois casos, das sequências que atravessam lacunas temporais do acervo de radar. Portanto, as diferenças apresentadas a seguir decorrem dos modelos e não de mudanças no conjunto de avaliação.
+
+A Tabela~\ref{tab:b1-c1-global} mostra que o C1 reduziu o RMSE global de 0,6300 para 0,5427 mm/15 min e o MAE global de 0,0751 para 0,0684 mm/15 min. As reduções correspondem a 13,9\% no RMSE e 8,9\% no MAE. Contudo, o viés do C1 foi negativo ($-0,0487$ mm/15 min), indicando tendência de subestimação, enquanto a persistência apresentou viés global praticamente nulo.
+
+\begin{table}[htbp]
+\centering
+\caption{Comparação global entre persistência (B1) e STConvS2S-C com radar (C1), no mesmo conjunto de teste. Métricas em mm/15 min.}
+\label{tab:b1-c1-global}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Modelo} & \textbf{RMSE} & \textbf{MAE} & \textbf{Viés} \\
+\midrule
+B1 -- Persistência & 0,6300 & 0,0751 & +0,0025 \\
+C1 -- Radar RGB & 0,5427 & 0,0684 & -0,0487 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O comportamento por horizonte, apresentado na Tabela~\ref{tab:b1-c1-horizontes}, qualifica esse resultado. A persistência é superior no primeiro horizonte, pois utiliza diretamente a última medida observada em cada estação. A partir do segundo horizonte, o C1 se torna competitivo e, nos horizontes de 45, 60 e 75 minutos, apresenta MAE menor. No quinto horizonte, o erro do C1 é 26,1\% inferior ao da persistência.
+
+\begin{table}[htbp]
+\centering
+\caption{MAE por horizonte de previsão. Todas as métricas estão em mm/15 min.}
+\label{tab:b1-c1-horizontes}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Modelo} & \textbf{T+1} & \textbf{T+2} & \textbf{T+3} & \textbf{T+4} & \textbf{T+5} \\
+\midrule
+B1 -- Persistência & 0,0432 & 0,0698 & 0,0796 & 0,0879 & 0,0947 \\
+C1 -- Radar RGB & 0,0666 & 0,0689 & 0,0674 & 0,0690 & 0,0700 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Entretanto, a melhoria global é concentrada em situações de chuva fraca ou ausência de chuva, que representam a maior parte das observações. A Tabela~\ref{tab:b1-c1-intensidade} mostra que o C1 reduziu o MAE nessa faixa, mas ainda teve erro superior ao da persistência para chuva moderada, forte e extrema. Esse achado evita uma interpretação indevida da métrica global: o radar, nesta configuração inicial, agrega informação útil ao longo do horizonte de previsão, mas ainda não recupera adequadamente a magnitude dos eventos mais severos.
+
+\begin{table}[htbp]
+\centering
+\caption{MAE por intensidade de precipitação. Métricas em mm/15 min.}
+\label{tab:b1-c1-intensidade}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Intensidade} & \textbf{B1} & \textbf{C1} & \textbf{Variação do C1} \\
+\midrule
+Fraca ou seca & 0,0433 & 0,0298 & $-31,1\%$ \\
+Moderada & 1,9819 & 2,3295 & $+17,5\%$ \\
+Forte & 6,9199 & 8,5466 & $+23,5\%$ \\
+Extrema & 13,4796 & 17,2576 & $+28,0\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Os resultados justificam os experimentos subsequentes: o C2 introduz uma função de perda ponderada e amostragem balanceada para enfatizar eventos intensos; o C3 acrescenta precipitação defasada das estações aos canais de entrada, hipótese especialmente relevante para melhorar o primeiro horizonte. Assim, B1 e C1 constituem uma linha de base auditável para medir de forma objetiva os ganhos dessas extensões.
