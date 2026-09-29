@@ -157,6 +157,36 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertEqual(int(mask.sum()), 2)
             self.assertEqual(tuple(output.shape), (1, 5, 2))
 
+    def test_station_sequence_dataset_rejects_samples_crossing_radar_gaps(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            year_dir = root / "year=2020"
+            timestamps = np.array([
+                "2020-01-01T00:00:00", "2020-01-01T00:15:00", "2020-01-01T00:30:00",
+                "2020-01-01T00:45:00", "2020-01-01T01:15:00", "2020-01-01T01:30:00",
+                "2020-01-01T01:45:00", "2020-01-01T02:00:00", "2020-01-01T02:15:00",
+                "2020-01-01T02:30:00", "2020-01-01T02:45:00", "2020-01-01T03:00:00",
+            ], dtype="<U19")
+            np.save(year_dir / "radar_timestamps.npy", timestamps)
+            metadata_path = year_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update({
+                "timestamps_file": "radar_timestamps.npy",
+                "aggregate_minutes": 15,
+                "enforce_timestamp_continuity": True,
+            })
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n2,1,1\n", encoding="utf-8")
+
+            dataset = StationSequenceDataset(
+                root, [2020], mapping=mapping, t_in=2, t_out=2, stride=1,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+
+            self.assertEqual(len(dataset), 6)
+
     def test_weighted_loss_gives_more_weight_to_extreme_target(self):
         prediction = torch.zeros((1, 1, 1, 1, 2))
         target = torch.tensor([[[[[0.0, np.log1p(20.0)]]]]])
