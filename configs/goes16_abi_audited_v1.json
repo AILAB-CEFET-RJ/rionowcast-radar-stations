@@ -1,0 +1,36 @@
+{
+  "name": "goes16_abi_audited",
+  "version": 1,
+  "source": {
+    "satellite": "GOES-16",
+    "product": "ABI-L2-CMIPF",
+    "bucket": "noaa-goes16",
+    "variable": "CMI",
+    "timestamp_convention": "scene start UTC parsed from the NOAA filename"
+  },
+  "channels": ["C08", "C09", "C13", "C14", "C15"],
+  "temporal_alignment": {
+    "output_minutes": 15,
+    "selection": "latest scene whose start timestamp is at or before the radar window start",
+    "maximum_scene_age_minutes": 20,
+    "causality": "A scene newer than the radar window start is never selected. Temporal derivatives are not part of v1."
+  },
+  "target_grid": {
+    "reference": "configs/radar_sumare_historical_audited_v1.json",
+    "height": 128,
+    "width": 128,
+    "projection": "AEQD spherical centred at the Sumaré radar",
+    "resampling": "nearest"
+  },
+  "storage": {
+    "dtype": "float32",
+    "normalization": {
+      "kind": "divide",
+      "divisor": 400.0,
+      "rationale": "ABI infrared CMI is stored as brightness temperature in kelvin. This fixed physical scale avoids fitting statistics on validation or test years; a train-only standardization may be added in a later version."
+    },
+    "missing_value": "NaN",
+    "availability_file": "goes_available.npy"
+  },
+  "status": "pilot_pending_coverage_and_spatial_audit"
+}

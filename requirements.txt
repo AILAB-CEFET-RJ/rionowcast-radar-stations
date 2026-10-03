@@ -15,3 +15,5 @@ tqdm
 pytz
 jupyter
 ipykernel
+netCDF4
+s3fs

@@ -89,3 +89,8 @@ def validate_checkpoint_configuration(
             "Inferência com --input-stations ainda requer as observações defasadas "
             "das estações e não é suportada por este CLI inicial."
         )
+    if configuration.get("input_goes", False):
+        raise ValueError(
+            "Inferência com --input-goes requer cenas ABI causalmente alinhadas "
+            "e ainda não é suportada por este CLI inicial."
+        )

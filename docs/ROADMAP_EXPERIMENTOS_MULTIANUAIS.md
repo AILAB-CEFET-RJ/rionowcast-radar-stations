@@ -74,6 +74,28 @@ O protocolo, limiares iniciais e comandos estão documentados em
 WebSirene não deve ser usada como supervisão até a conclusão dos dois itens
 pendentes acima.
 
+### GOES-16 ABI
+
+- [x] Definir contrato causal V2 e CLIs para download retomável, memmaps
+  alinhados ao radar e auditoria de cobertura.
+- [x] Implementar piloto C13 streaming por eventos e controles secos, sem
+  retenção dos NetCDFs Full Disk.
+- [x] Executar smoke test C13 e aprovar cobertura, georreferenciamento e
+  `causality_errors=0`.
+- [x] Processar e auditar C13 em 2022 (99,57\% de cobertura) e 2023 (99,69\%),
+  ambos sem erro causal.
+- [ ] Processar e auditar C13 em 2018--2021 e 2024.
+- [ ] Comparar C3 restrito (2018--2024) com radar + estações lagadas + ABI.
+- [ ] Integrar GLM somente após estabelecer o ganho marginal dos canais ABI.
+
+O contrato V2 seleciona por canal a cena cujo término seja anterior ou igual ao
+início da janela de radar. A configuração multicanal usa os canais
+infravermelhos `C08`, `C09`, `C13`, `C14` e `C15`; C13 também pode ser gerado
+isoladamente. O pipeline mantém os produtos GOES separados do memmap de radar
+e descarta qualquer janela de entrada sem todos os canais causais disponíveis.
+Consulte
+[`PIPELINE_GOES16_AUDITAVEL.md`](PIPELINE_GOES16_AUDITAVEL.md).
+
 ### Proveniência AlertaRio
 
 - [x] Identificar divergência entre o mapeamento atual das estações e os

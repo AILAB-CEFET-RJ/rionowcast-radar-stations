@@ -21,6 +21,10 @@ O uso futuro da rede WebSirene depende da auditoria documentada em
 [`docs/CONTROLE_QUALIDADE_WEBSIRENE.md`](docs/CONTROLE_QUALIDADE_WEBSIRENE.md).
 O procedimento de auditoria e regeneracao rastreavel dos targets AlertaRio esta
 em [`docs/CONTROLE_QUALIDADE_ALERTARIO.md`](docs/CONTROLE_QUALIDADE_ALERTARIO.md).
+O fluxo opcional e causal de produtos ABI do GOES-16 esta documentado em
+[`docs/PIPELINE_GOES16_AUDITAVEL.md`](docs/PIPELINE_GOES16_AUDITAVEL.md).
+O procedimento completo para baixar C13 em uma nova maquina esta em
+[`docs/GUIA_DOWNLOAD_GOES16.md`](docs/GUIA_DOWNLOAD_GOES16.md).
 
 ## Instalacao
 
@@ -100,6 +104,12 @@ Os comandos principais sao:
 | `nowcasting-build-alertario-targets` | Gera targets densos AlertaRio alinhados ao radar |
 | `nowcasting-convert-sparse-targets` | Converte targets densos para o formato esparso final |
 | `nowcasting-downsample` | Reduz espacialmente um dataset memmap existente |
+| `nowcasting-download-goes16-abi` | Baixa cenas ABI do GOES-16 com manifesto retomavel |
+| `nowcasting-build-goes16-memmaps` | Reprojeta e alinha GOES aos timestamps do radar |
+| `nowcasting-audit-goes16` | Audita cobertura e causalidade dos tensores GOES |
+| `nowcasting-select-goes16-pilot-events` | Seleciona eventos e controles para o piloto C13 |
+| `nowcasting-build-goes16-event-pilot` | Baixa, reprojeta e remove cenas C13 Full Disk por streaming |
+| `nowcasting-audit-goes16-event-pilot` | Audita o sinal C13 contra as estações do piloto |
 
 ## Documentacao
 
