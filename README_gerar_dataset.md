@@ -36,24 +36,69 @@ conteudo CSV; converta-os para Parquet verdadeiro antes desta etapa. A EDA de
 fonte esta em `notebooks/01_eda/01_alertario_eda.ipynb`, mas conversoes devem
 ser implementadas como scripts reproduziveis, nunca em notebook.
 
-## 1. Gerar Frames De Radar
+## 1. Auditar E Gerar Frames De Radar
 
-O comando le os PNGs, agrega janelas de 15 minutos e grava memmaps por ano:
+Antes da geracao, audite geometria, duplicatas e lacunas temporais. O contrato
+de crop e agregacao deve ser sempre explicito:
+
+```bash
+nowcasting-audit-radar-pngs \
+  --data-root data/raw/radar_sumare \
+  --output-dir outputs/analysis/radar_sumare/png_audit_v1 \
+  --year-start 2023 --year-end 2024 \
+  --capture-config configs/radar_sumare_historical_audited_v1.json \
+  --verify-images
+```
+
+Depois de validar os previews e a cobertura, gere um dataset novo, sem
+sobrescrever versoes anteriores:
 
 ```bash
 nowcasting-build-radar \
   --data-root data/raw/radar_sumare \
-  --output-root data/datasets/radar_sumare_2012_2024_15min_128_sparse \
+  --output-root data/datasets/radar_sumare_2012_2024_15min_128_audited_v3 \
   --year-start 2012 \
   --year-end 2024 \
+  --capture-config configs/radar_sumare_historical_audited_v1.json \
   --aggregate-minutes 15 \
   --height 128 \
   --width 128 \
-  --min-frames-per-window 3
+  --min-frames-per-window 6 \
+  --aggregation rgb-max
 ```
 
 Para cada ano, sao produzidos `radar_frames.dat`, `radar_timestamps.npy` e
-`metadata.json`.
+`metadata.json`, alem de `window_coverage.csv`. O gerador escreve primeiro em
+`year=AAAA.partial` e publica o ano apenas quando a escrita termina. Consulte
+[`docs/PIPELINE_RADAR_SUMARE_AUDITAVEL.md`](docs/PIPELINE_RADAR_SUMARE_AUDITAVEL.md)
+para os criterios de validacao e a limitacao conhecida da agregacao RGB.
+
+Para retomar uma geração longa, acrescente `--resume`: os diretórios anuais já
+publicados são preservados e ignorados. Se a interrupção deixar
+`year=AAAA.partial`, inspecione-o e repita com `--resume --restart-partial`;
+isso reconstrói apenas aquele ano parcial, sem tocar nos anos concluídos.
+
+Antes de gerar targets, a associacao entre estacoes e pixels deve ser validada.
+O contrato historico inclui um candidato geografico baseado no centro do radar
+e no raio operacional de 138,9 km, mas esse candidato nao deve ser usado em
+treinamento ate ser confirmado pela auditoria temporal e espacial descrita em
+[`docs/PIPELINE_RADAR_SUMARE_AUDITAVEL.md`](docs/PIPELINE_RADAR_SUMARE_AUDITAVEL.md).
+
+Para o contrato histórico auditável, os PNGs são convertidos de
+`America/Sao_Paulo` para UTC pelo gerador. Os targets `m15` devem usar offset
+de `-15` minutos porque seu timestamp marca o fim do acumulado:
+
+```bash
+nowcasting-build-alertario-sparse-targets \
+  --alertario-root data/pluviometricos_alertario \
+  --mapping configs/mapeamento_pixel_estacao_alertario_historical_v1.csv \
+  --radar-root data/datasets/radar_sumare_2012_2024_15min_128_audited_v3 \
+  --output-root data/datasets/radar_sumare_2012_2024_15min_128_audited_v3 \
+  --year-start 2012 --year-end 2024 \
+  --height 128 --width 128 \
+  --height-orig 654 --width-orig 656 \
+  --observation-to-radar-offset-minutes -15
+```
 
 ## 2. Gerar Targets AlertaRio
 

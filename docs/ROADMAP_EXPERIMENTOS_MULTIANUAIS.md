@@ -74,6 +74,28 @@ O protocolo, limiares iniciais e comandos estão documentados em
 WebSirene não deve ser usada como supervisão até a conclusão dos dois itens
 pendentes acima.
 
+### GOES-16 ABI
+
+- [x] Definir contrato causal V2 e CLIs para download retomável, memmaps
+  alinhados ao radar e auditoria de cobertura.
+- [x] Implementar piloto C13 streaming por eventos e controles secos, sem
+  retenção dos NetCDFs Full Disk.
+- [x] Executar smoke test C13 e aprovar cobertura, georreferenciamento e
+  `causality_errors=0`.
+- [x] Processar e auditar C13 em 2022 (99,57\% de cobertura) e 2023 (99,69\%),
+  ambos sem erro causal.
+- [ ] Processar e auditar C13 em 2018--2021 e 2024.
+- [ ] Comparar C3 restrito (2018--2024) com radar + estações lagadas + ABI.
+- [ ] Integrar GLM somente após estabelecer o ganho marginal dos canais ABI.
+
+O contrato V2 seleciona por canal a cena cujo término seja anterior ou igual ao
+início da janela de radar. A configuração multicanal usa os canais
+infravermelhos `C08`, `C09`, `C13`, `C14` e `C15`; C13 também pode ser gerado
+isoladamente. O pipeline mantém os produtos GOES separados do memmap de radar
+e descarta qualquer janela de entrada sem todos os canais causais disponíveis.
+Consulte
+[`PIPELINE_GOES16_AUDITAVEL.md`](PIPELINE_GOES16_AUDITAVEL.md).
+
 ### Proveniência AlertaRio
 
 - [x] Identificar divergência entre o mapeamento atual das estações e os
@@ -191,3 +213,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-22 | Comparação por estação | Concluído | Runners registram métricas por estação; comparador valida splits e contagens antes de gerar tabelas. |
 | 2026-09-23 | M4 multianual na Skat | Concluído | Early stopping na época 14; melhor época 4; teste: RMSE 0,53957, MAE 0,10985, Bias +0,01868. |
 | 2026-09-23 | Auditoria WebSirene V1 | Implementada | Flags, whitelist preliminar, comparação opcional com AlertaRio e testes sintéticos; aguarda execução sobre os dados reais. |
+| 2026-09-30 | C2 auditado V3: `weighted-huber` + sampler balanceado | Concluído, não selecionado | Mesmo teste de B1/C1 (`n=1.526.562`); melhor época 1; RMSE 1,1287, MAE 0,1551 e viés +0,0662 mm/15 min. Melhorou parcialmente as classes moderada/forte/extrema em relação ao C1, mas piorou fortemente a classe fraca/seca e permaneceu abaixo de B1 nos eventos intensos. Não usar esta configuração sem nova calibração de pesos e amostragem. |

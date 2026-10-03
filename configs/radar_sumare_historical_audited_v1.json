@@ -1,0 +1,59 @@
+{
+  "name": "radar_sumare_historical_audited",
+  "version": 1,
+  "source_image": {
+    "width": 656,
+    "height": 654,
+    "mode": "RGBA"
+  },
+  "reflectivity_crop": {
+    "left": 0,
+    "top": 0,
+    "right_exclusive": 656,
+    "bottom_exclusive": 654
+  },
+  "historical_georeferencing": {
+    "radar_center_wgs84": {
+      "latitude": -22.955139,
+      "longitude": -43.248278,
+      "altitude_m": 695.51,
+      "source": "Sistema Alerta Rio - Informacoes Radar"
+    },
+    "display_range_km": 138.9,
+    "range_source": "Confirmacao operacional de Raquel; raio utilizado no produto de imagem historico.",
+    "projection": "AEQD esferica centrada no radar; raio medio terrestre 6371008.8 m",
+    "pixel_orientation": "north_up_east_right",
+    "status": "validated_with_alertario_2023_2024",
+    "rationale": "Com 656x654 pixels, 138.9 km do centro a borda implica aproximadamente 425 m por pixel. A hipótese north-up/east-right venceu as auditorias independentes de 2023 e 2024 quando os timestamps foram tratados como PNG local America/Sao_Paulo e m15 UTC no fim do intervalo."
+  },
+  "temporal_alignment": {
+    "png_filename_timezone": "America/Sao_Paulo",
+    "png_timestamp_convention": "local wall-clock time at 2-minute capture",
+    "radar_window_timestamp_convention": "UTC start of 15-minute aggregation window",
+    "alertario_m15_timestamp_convention": "UTC end of 15-minute accumulation",
+    "alertario_m15_to_radar_window_offset_minutes": -15,
+    "validation": "Auditorias independentes de 2023 e 2024 tiveram pico em -195 min entre timestamp m15 UTC e nome local do PNG: -180 min de fuso e -15 min de fim para início da janela."
+  },
+  "output": {
+    "width": 128,
+    "height": 128,
+    "interpolation": "nearest"
+  },
+  "temporal_aggregation": {
+    "minutes": 15,
+    "min_frames_per_window": 6,
+    "method": "rgb-max",
+    "warning": "rgb-max agrega canais de uma imagem RGB e nao constitui uma agregacao fisica de refletividade."
+  },
+  "station_mapping_transform": {
+    "status": "validated_with_alertario_2023_2024",
+    "legacy_grid": {
+      "height": 656,
+      "width": 654
+    },
+    "method": "use configs/mapeamento_pixel_estacao_alertario_historical_v1.csv",
+    "rationale": "Os PNGs históricos medem 654 linhas por 656 colunas. O mapeamento versionado foi regenerado por geometria radar-cêntrica e validado em 2023 e 2024; não aplique diretamente pixel_i/pixel_j do CSV legado."
+  },
+  "description": "Contrato para reconstruir a serie historica a partir dos PNGs de 656 colunas por 654 linhas. Diferentemente das capturas operacionais 1024x768, esses PNGs ja contem apenas o bitmap de refletividade e nao exigem crop espacial.",
+  "status": "provisional_pending_full_archive_audit"
+}

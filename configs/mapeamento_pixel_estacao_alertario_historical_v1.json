@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "source_mapping": "data/mapeamento_pixel_estacao_alertario.csv",
+  "source_shape": [654, 656],
+  "mapping_method": "radar-centred spherical AEQD; north-up, east-right",
+  "radar_center_wgs84": {
+    "latitude": -22.955139,
+    "longitude": -43.248278,
+    "altitude_m": 695.51
+  },
+  "display_range_km": 138.9,
+  "validation": {
+    "years": [2023, 2024],
+    "winner": "geographic_aeqd_north_up",
+    "radar_offset_minutes_from_m15_timestamp": -195,
+    "interpretation": "PNG filename is America/Sao_Paulo local time; m15 timestamp is UTC interval end.",
+    "2023_rank_correlation": 0.732698,
+    "2024_rank_correlation": 0.689291,
+    "2023_wet_dry_echo_delta": 0.670347,
+    "2024_wet_dry_echo_delta": 0.682874
+  }
+}

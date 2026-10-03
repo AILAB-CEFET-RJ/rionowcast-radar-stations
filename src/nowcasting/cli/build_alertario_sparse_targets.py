@@ -29,6 +29,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=128)
     parser.add_argument("--height-orig", type=int, default=656)
     parser.add_argument("--width-orig", type=int, default=654)
+    parser.add_argument(
+        "--observation-to-radar-offset-minutes", type=int, default=0,
+        help="Offset para converter o timestamp da observação ao timestamp inicial da janela de radar.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -61,9 +65,9 @@ def load_mapping(args: argparse.Namespace) -> pd.DataFrame:
     return mapping[["station_id", "row", "column"]]
 
 
-def load_year_observations(parquet_files: list[Path], year: int, mapping: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
-    start = pd.Timestamp(year=year, month=1, day=1, tz="UTC")
-    stop = pd.Timestamp(year=year + 1, month=1, day=1, tz="UTC")
+def load_observations_in_interval(
+    parquet_files: list[Path], start: pd.Timestamp, stop: pd.Timestamp, mapping: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, int]]:
     frames = []
     stats = {"rows_scanned": 0, "invalid_datetime": 0, "missing_m15": 0, "sentinel_m15": 0,
              "negative_m15": 0, "unmapped_station": 0}
@@ -109,10 +113,16 @@ def process_year(args: argparse.Namespace, year: int, mapping: pd.DataFrame, par
     if (sparse_path.exists() or metadata_path.exists()) and not args.overwrite:
         raise FileExistsError(f"{output_dir} ja possui targets; use uma nova raiz ou --overwrite.")
 
-    timestamps = [normalize_timestamp(value) for value in np.load(timestamps_path, allow_pickle=True)]
+    timestamps = [normalize_timestamp(value) for value in np.load(timestamps_path, allow_pickle=False)]
     timestamp_index = {timestamp: index for index, timestamp in enumerate(timestamps)}
-    observations, stats = load_year_observations(parquet_files, year, mapping)
-    observations["frame"] = observations["timestamp"].map(timestamp_index)
+    if not timestamps:
+        raise ValueError(f"{timestamps_path} não contém timestamps.")
+    offset = pd.Timedelta(minutes=args.observation_to_radar_offset_minutes)
+    observation_start = min(timestamps) - offset
+    observation_stop = max(timestamps) - offset + pd.Timedelta(minutes=15)
+    observations, stats = load_observations_in_interval(parquet_files, observation_start, observation_stop, mapping)
+    observations["radar_timestamp"] = observations["timestamp"] + offset
+    observations["frame"] = observations["radar_timestamp"].map(timestamp_index)
     missing_timestamps = int(observations["frame"].isna().sum())
     observations = observations.dropna(subset=["frame"]).copy()
     observations["frame"] = observations["frame"].astype(np.int32)
@@ -138,6 +148,8 @@ def process_year(args: argparse.Namespace, year: int, mapping: pd.DataFrame, par
         "width": args.width,
         "channels": 1,
         "temporal_resolution_minutes": 15,
+        "observation_timestamp_to_radar_offset_minutes": args.observation_to_radar_offset_minutes,
+        "observation_timestamp_convention": "configured_by_cli",
         "shape": [len(timestamps), args.height, args.width, 1],
         "format": "sparse",
         "sparse_file": sparse_path.name,

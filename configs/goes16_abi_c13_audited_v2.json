@@ -1,0 +1,31 @@
+{
+  "name": "goes16_abi_c13_audited",
+  "version": 2,
+  "source": {
+    "satellite": "GOES-16",
+    "product": "ABI-L2-CMIPF",
+    "bucket": "noaa-goes16",
+    "variable": "CMI",
+    "timestamp_convention": "scene start and end UTC parsed from the NOAA filename"
+  },
+  "channels": ["C13"],
+  "temporal_alignment": {
+    "output_minutes": 15,
+    "selection": "latest scene whose end timestamp is at or before the radar window start",
+    "maximum_scene_age_minutes": 20,
+    "causality": "Each ABI scene must end at or before its radar window start."
+  },
+  "target_grid": {
+    "reference": "configs/radar_sumare_historical_audited_v1.json",
+    "height": 128,
+    "width": 128,
+    "projection": "AEQD spherical centred at the Sumaré radar",
+    "resampling": "nearest"
+  },
+  "storage": {
+    "dtype": "float32",
+    "normalization": {"kind": "divide", "divisor": 400.0},
+    "missing_value": "NaN"
+  },
+  "status": "audited-streaming-pilot-strict-causality"
+}

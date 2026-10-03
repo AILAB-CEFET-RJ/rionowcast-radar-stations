@@ -55,8 +55,8 @@ RESUME_CONFIG_KEYS = (
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
-    "mapping_height_orig", "mapping_width_orig", "input_stations", "crop",
-    "radar_capture_preprocessing",
+    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "crop",
+    "radar_capture_preprocessing", "goes_preprocessing",
 )
 
 
@@ -122,6 +122,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--input-stations", action="store_true",
         help="Acrescenta chuva defasada e mascara de disponibilidade das estações à entrada.",
+    )
+    parser.add_argument(
+        "--input-goes", action="store_true",
+        help="Acrescenta canais GOES-16 causalmente alinhados ao radar; requer year=*/goes16.",
     )
     parser.add_argument(
         "--station-mapping", type=Path,
@@ -498,7 +502,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         f"Training batches | microbatch={args.batch_size} | "
         f"accumulation={args.gradient_accumulation_steps} | "
         f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}\n"
-        f"Input channels | radar=3 | stations={2 if args.input_stations else 0} | "
+        f"Input channels | radar=3 | goes={sample_x.shape[0] - 3 - (2 if args.input_stations else 0)} | stations={2 if args.input_stations else 0} | "
         f"total={sample_x.shape[0]}\n"
         f"DataLoader | workers={args.workers} | pin_memory={args.pin_memory} | "
         f"persistent_workers={args.persistent_workers} | "
@@ -710,6 +714,7 @@ def main() -> None:
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
+                                  input_goes=args.input_goes,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
@@ -718,6 +723,7 @@ def main() -> None:
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
+                                  input_goes=args.input_goes,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
@@ -726,6 +732,7 @@ def main() -> None:
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
+                                  input_goes=args.input_goes,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
@@ -735,6 +742,7 @@ def main() -> None:
         raise ValueError("O crop calculado difere entre os splits.")
     configuration["crop"] = crop_metadata
     configuration["radar_capture_preprocessing"] = datasets[0].capture_preprocessing
+    configuration["goes_preprocessing"] = datasets[0].goes_preprocessing
     if resume_state is not None:
         validate_resume_checkpoint(resume_state, configuration, world_size)
     if is_main(rank) and resume_state is None:

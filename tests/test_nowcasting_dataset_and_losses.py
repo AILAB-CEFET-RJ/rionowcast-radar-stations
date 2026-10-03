@@ -1,4 +1,5 @@
 import json
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -66,6 +67,36 @@ def create_sparse_year(root: Path, year: int) -> None:
             {"shape": list(shape_target), "format": "sparse", "sparse_file": "targets_alertario_sparse.npz"},
             file,
         )
+
+
+def create_goes_year(root: Path, year: int, available: list[bool] | None = None) -> None:
+    year_dir = root / f"year={year}"
+    radar_timestamps = np.array(
+        [f"{year}-01-01T{index // 4:02d}:{(index % 4) * 15:02d}:00" for index in range(12)], dtype="<U19"
+    )
+    np.save(year_dir / "radar_timestamps.npy", radar_timestamps)
+    metadata_path = year_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update({"timestamps_file": "radar_timestamps.npy", "aggregate_minutes": 15, "enforce_timestamp_continuity": True})
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    goes_dir = year_dir / "goes16"
+    goes_dir.mkdir()
+    shape = (12, 2, 2, 2)
+    goes = np.memmap(goes_dir / "goes_frames.dat", dtype=np.float32, mode="w+", shape=shape)
+    goes[:] = 200.0
+    goes.flush()
+    del goes
+    availability = np.asarray(available or [True] * 12, dtype=np.uint8)
+    np.save(goes_dir / "goes_available.npy", availability)
+    np.save(goes_dir / "goes_source_timestamps.npy", np.full((12, 2), f"{year}-01-01T00:00:00+00:00", dtype="<U32"))
+    digest = hashlib.sha256(np.asarray(radar_timestamps, dtype="<U32").tobytes()).hexdigest()
+    (goes_dir / "metadata.json").write_text(json.dumps({
+        "shape": list(shape), "dtype": "float32", "frames_file": "goes_frames.dat",
+        "availability_file": "goes_available.npy", "channels": ["C13", "C14"],
+        "normalization": {"kind": "divide", "divisor": 400.0},
+        "radar_timestamps_sha256": digest,
+        "goes_config_sha256": "goes-test", "target_grid": {"height": 2, "width": 2},
+    }), encoding="utf-8")
 
 
 class NowcastingDatasetTests(unittest.TestCase):
@@ -139,6 +170,18 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertAlmostEqual(y[0, 0, 0, 0].item(), np.log1p(2.0))
             self.assertEqual(int(mask.sum()), 2)
 
+    def test_goes_adds_channels_and_filters_incomplete_input_history(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            create_goes_year(root, 2020, [True, True, False, True, True, True, True, True, True, True, True, True])
+            dataset = RadarStationMemmapDataset(root, [2020], t_in=2, t_out=2, stride=1, input_goes=True)
+            self.assertEqual(dataset.samples, [(2020, 0), (2020, 3), (2020, 4), (2020, 5), (2020, 6), (2020, 7), (2020, 8)])
+            x, _, _ = dataset[0]
+            self.assertEqual(tuple(x.shape), (5, 2, 2, 2))
+            self.assertAlmostEqual(x[3, 0, 0, 0].item(), 0.5)
+            self.assertAlmostEqual(x[4, 1, 1, 1].item(), 0.5)
+
     def test_station_sequence_dataset_and_model_use_values_and_masks(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -156,6 +199,36 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertEqual(tuple(target.shape), (5, 2))
             self.assertEqual(int(mask.sum()), 2)
             self.assertEqual(tuple(output.shape), (1, 5, 2))
+
+    def test_station_sequence_dataset_rejects_samples_crossing_radar_gaps(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            year_dir = root / "year=2020"
+            timestamps = np.array([
+                "2020-01-01T00:00:00", "2020-01-01T00:15:00", "2020-01-01T00:30:00",
+                "2020-01-01T00:45:00", "2020-01-01T01:15:00", "2020-01-01T01:30:00",
+                "2020-01-01T01:45:00", "2020-01-01T02:00:00", "2020-01-01T02:15:00",
+                "2020-01-01T02:30:00", "2020-01-01T02:45:00", "2020-01-01T03:00:00",
+            ], dtype="<U19")
+            np.save(year_dir / "radar_timestamps.npy", timestamps)
+            metadata_path = year_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update({
+                "timestamps_file": "radar_timestamps.npy",
+                "aggregate_minutes": 15,
+                "enforce_timestamp_continuity": True,
+            })
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n2,1,1\n", encoding="utf-8")
+
+            dataset = StationSequenceDataset(
+                root, [2020], mapping=mapping, t_in=2, t_out=2, stride=1,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+
+            self.assertEqual(len(dataset), 6)
 
     def test_weighted_loss_gives_more_weight_to_extreme_target(self):
         prediction = torch.zeros((1, 1, 1, 1, 2))

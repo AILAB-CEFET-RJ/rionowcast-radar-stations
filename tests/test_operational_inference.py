@@ -44,6 +44,8 @@ class OperationalInferenceTests(unittest.TestCase):
             validate_checkpoint_configuration({}, config)
         with self.assertRaisesRegex(ValueError, "difere"):
             validate_checkpoint_configuration({"radar_capture_preprocessing": {"version": 2}}, config)
+        with self.assertRaisesRegex(ValueError, "input-goes"):
+            validate_checkpoint_configuration({"radar_capture_preprocessing": config, "input_goes": True}, config)
         validate_checkpoint_configuration({"radar_capture_preprocessing": config}, config)
 
 

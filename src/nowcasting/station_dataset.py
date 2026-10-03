@@ -133,10 +133,40 @@ class StationSequenceDataset(Dataset):
         n_possible = shape[0] - (self.t_in + self.t_out) + 1
         if n_possible <= 0:
             raise ValueError(f"{year}: frames insuficientes para as sequências configuradas.")
-        self.samples.extend((year, start) for start in range(0, n_possible, self.stride))
+        candidate_starts = range(0, n_possible, self.stride)
+        if radar_metadata.get("enforce_timestamp_continuity", False):
+            timestamps_path = year_dir / radar_metadata.get("timestamps_file", "radar_timestamps.npy")
+            if not timestamps_path.is_file():
+                raise FileNotFoundError(f"{year}: timestamps obrigatórios ausentes: {timestamps_path}")
+            raw_timestamps = np.load(timestamps_path, allow_pickle=False)
+            if len(raw_timestamps) != shape[0]:
+                raise ValueError(
+                    f"{year}: {timestamps_path.name} tem {len(raw_timestamps)} timestamps para {shape[0]} frames."
+                )
+            try:
+                minutes = np.asarray(raw_timestamps, dtype="datetime64[m]").astype(np.int64)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{year}: timestamps inválidos para auditoria temporal.") from error
+            expected_minutes = int(radar_metadata.get("aggregate_minutes", 15))
+            bad_edges = np.diff(minutes) != expected_minutes
+            prefix = np.concatenate(([0], np.cumsum(bad_edges, dtype=np.int64)))
+            sequence_length = self.t_in + self.t_out
+            candidate_starts = [
+                start for start in candidate_starts
+                if prefix[start + sequence_length - 1] == prefix[start]
+            ]
+            discarded = len(range(0, n_possible, self.stride)) - len(candidate_starts)
+            if discarded:
+                print(
+                    f"[{self.split_name}] Ano {year} | descartadas {discarded} amostras que cruzam lacunas do radar",
+                    flush=True,
+                )
+        else:
+            candidate_starts = list(candidate_starts)
+        self.samples.extend((year, start) for start in candidate_starts)
         print(
             f"[{self.split_name}] Ano {year} carregado | estações={len(self.station_ids)} | "
-            f"frames={shape[0]} | amostras={len(range(0, n_possible, self.stride))}", flush=True,
+            f"frames={shape[0]} | amostras={len(candidate_starts)}", flush=True,
         )
 
     def __len__(self) -> int:
