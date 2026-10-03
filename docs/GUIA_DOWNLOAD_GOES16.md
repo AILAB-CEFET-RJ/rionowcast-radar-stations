@@ -11,13 +11,16 @@ apagados automaticamente.
 ## Antes de começar
 
 Você precisará de Linux ou WSL2, Internet, `git`, Conda ou Miniconda
-(`conda --version`), acesso ao GitHub e uma cópia do dataset-base fornecida por
-Eduardo. O Git **não** contém os dados grandes de radar ou estações.
+(`conda --version`), acesso ao GitHub e o pacote de referência do radar
+fornecido por Eduardo. O Git **não** contém os dados grandes de radar ou
+estações.
 
-O dataset-base ocupa aproximadamente 18 GB. Um ano do canal C13 ocupa cerca de
-1,7 GB; a pilha de cinco canais disponíveis neste projeto ocupa cerca de 8,2
-GB por ano. Mantenha ao menos 25 GB livres após copiar o dataset-base para C13,
-ou 35 GB para a pilha de cinco canais:
+Para baixar somente GOES, não é necessário copiar o dataset completo de radar,
+que ocupa aproximadamente 18 GB. O pacote de referência contém apenas os
+timestamps e metadados do radar e tem cerca de 1 MB. Um ano do canal C13 ocupa
+cerca de 1,7 GB; a pilha de cinco canais disponíveis neste projeto ocupa cerca
+de 8,2 GB por ano. Mantenha ao menos 5 GB livres para C13 ou 12 GB para a pilha
+de cinco canais:
 
 ```bash
 df -h .
@@ -76,17 +79,29 @@ Se aparecer a tela de ajuda, a instalação está correta. Se `conda` não exist
 ou a instalação falhar, envie o erro a Eduardo e não instale pacotes do sistema
 operacional sem orientação.
 
-## 3. Copiar e verificar o dataset-base
+## 3. Copiar e verificar a referência temporal do radar
 
-Copie a pasta fornecida por Eduardo para este caminho:
+Eduardo fornecerá o arquivo `radar_goes_reference_2012_2024.tgz`. Copie-o para
+a máquina e extraia-o dentro do caminho abaixo:
 
 ```text
 ~/ailab/rionowcast-radar-stations/data/datasets/
   radar_sumare_2012_2024_15min_128_audited_v3/
 ```
 
-Defina variáveis e confira os arquivos de um ano. No exemplo, `2022` pode ser
-trocado pelo ano desejado:
+Execute, adaptando o primeiro caminho ao local onde o arquivo foi salvo:
+
+```bash
+cd ~/ailab/rionowcast-radar-stations
+dataset=data/datasets/radar_sumare_2012_2024_15min_128_audited_v3
+mkdir -p "$dataset"
+tar -xzf ~/Downloads/radar_goes_reference_2012_2024.tgz -C "$dataset"
+```
+
+O downloader GOES usa somente os timestamps e a geometria do radar: cada frame
+C13 ou ABI é escolhido para uma janela de radar de 15 minutos e reprojetado
+para a mesma grade espacial. Portanto, confira os arquivos abaixo. No exemplo,
+`2022` pode ser trocado pelo ano desejado:
 
 ```bash
 cd ~/ailab/rionowcast-radar-stations
@@ -94,14 +109,17 @@ dataset=data/datasets/radar_sumare_2012_2024_15min_128_audited_v3
 year=2022
 year_dir="$dataset/year=$year"
 
-for file in radar_frames.dat radar_timestamps.npy metadata.json \
-  targets_alertario_sparse.npz targets_alertario_metadata.json; do
+for file in radar_timestamps.npy metadata.json; do
   test -s "$year_dir/$file" && echo "OK: $file" || echo "AUSENTE: $file"
 done
 ```
 
 Todos devem aparecer como `OK`. Caso algum esteja ausente, não inicie o
-download; solicite uma cópia completa do dataset-base.
+download; solicite novamente o pacote de referência do radar.
+
+Os frames RGB de radar e os arquivos de estações não são necessários nesta
+etapa. Eles serão necessários somente depois, para treinar ou avaliar um modelo
+que combine radar, satélite e precipitação medida.
 
 ## 4. Escolher canais e baixar um ano
 
