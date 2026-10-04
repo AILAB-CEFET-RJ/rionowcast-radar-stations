@@ -230,3 +230,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+data/transfers/radar_goes_reference_2012_2024.tgz
