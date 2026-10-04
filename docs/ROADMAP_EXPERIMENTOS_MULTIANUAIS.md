@@ -162,6 +162,9 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
 - [x] Implementar registros canônicos Parquet e avaliador pareado com métricas
   contínuas, categóricas, bootstrap diário, diagramas de desempenho, eventos
   por estação e calibração de limiar isolada na validação.
+- [x] Ampliar o avaliador com métricas por estação, intervalos de confiança por
+  intensidade, relatórios Markdown/LaTeX, eventos municipais proxy e
+  ferramentas para planejar e agregar seeds independentes.
 - [ ] Executar B2a no split cronológico 2012--2021 / 2022 / 2023--2024,
   com `stride=5`, e registrar fallbacks do fluxo óptico.
 - [ ] Executar B2b no mesmo split, selecionando `alpha` e o peso da mistura
@@ -172,9 +175,19 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
   destacando T+45--T+75 e as classes moderada, forte e extrema.
 - [ ] Repetir C1 e C3 com ao menos três seeds e reportar variação entre seeds
   separadamente do bootstrap meteorológico por dia.
+- [ ] Exportar registros canônicos alinhados de B1, B2a, B2b, C1, C2 e C3 e
+  gerar a avaliação completa: métricas contínuas, categóricas por limiar,
+  skill contra B1, intervalos de confiança e diagramas de desempenho.
+- [ ] Calibrar limiares de decisão exclusivamente em 2022 e reportar, sem novo
+  ajuste, o desempenho de alerta em 2023--2024; manter MAE, RMSE e viés sem
+  calibração posterior.
+- [ ] Revisar qualitativamente falsos alertas, eventos não detectados e a
+  antecedência dos alertas, com foco nos limiares forte e extremo e nas
+  métricas por estação e no proxy municipal.
 - [ ] Após construir dataset auditável para 2025--2026, definir um novo split
-  cronológico sem alterar o teste histórico já publicado e repetir a avaliação
-  com registros canônicos.
+  cronológico que preserve 2023--2024 como teste histórico publicado e use
+  2025--2026 como teste final independente, sem ajustar hiperparâmetros nesses
+  anos; repetir a avaliação com registros canônicos.
 - [x] Implementar modelo temporal multivariado somente com estações.
 - [x] Registrar métricas globais e por horizonte para cada estação nos novos
   runners de radar e somente-estações.
@@ -258,3 +271,4 @@ testar um sampler de probabilidades moderadas para reduzir essa repetição.
 | 2026-09-23 | M4 multianual na Skat | Concluído | Early stopping na época 14; melhor época 4; teste: RMSE 0,53957, MAE 0,10985, Bias +0,01868. |
 | 2026-09-23 | Auditoria WebSirene V1 | Implementada | Flags, whitelist preliminar, comparação opcional com AlertaRio e testes sintéticos; aguarda execução sobre os dados reais. |
 | 2026-09-30 | C2 auditado V3: `weighted-huber` + sampler balanceado | Concluído, não selecionado | Mesmo teste de B1/C1 (`n=1.526.562`); melhor época 1; RMSE 1,1287, MAE 0,1551 e viés +0,0662 mm/15 min. Melhorou parcialmente as classes moderada/forte/extrema em relação ao C1, mas piorou fortemente a classe fraca/seca e permaneceu abaixo de B1 nos eventos intensos. Não usar esta configuração sem nova calibração de pesos e amostragem. |
+| 2026-10-04 | Infraestrutura de avaliação expandida | Concluído | Métricas por estação, bootstrap por intensidade, relatórios Markdown/LaTeX, eventos por estação e proxy municipal, além de planejamento e agregação de múltiplas seeds. A execução comparativa completa permanece pendente. |
