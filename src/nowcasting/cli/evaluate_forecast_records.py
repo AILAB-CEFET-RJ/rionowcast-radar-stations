@@ -8,7 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from nowcasting.forecast_evaluation import align_records, evaluate_records, paired_daily_bootstrap
+from nowcasting.forecast_evaluation import align_records, evaluate_records, paired_daily_bootstrap, skill_scores
 
 
 def named_path(value: str) -> tuple[str, Path]:
@@ -50,14 +50,26 @@ def main() -> None:
         raise ValueError("Nomes de --forecast devem ser únicos e incluir --baseline.")
     aligned = align_records({name: pd.read_parquet(path) for name, path in named.items()})
     reports = {name: evaluate_records(records, thresholds) for name, records in aligned.items()}
-    bootstrap = {name: paired_daily_bootstrap(aligned[args.baseline], records, thresholds,
-                                               replicates=args.bootstrap_replicates, seed=args.bootstrap_seed)
-                 for name, records in aligned.items() if name != args.baseline}
+    bootstrap, skills = {}, {}
+    horizons = sorted({int(value) for report in reports.values() for value in report["horizons"]})
+    for name, records in aligned.items():
+        if name == args.baseline:
+            continue
+        skills[name] = skill_scores(reports[args.baseline], reports[name])
+        bootstrap[name] = {
+            "global": paired_daily_bootstrap(aligned[args.baseline], records, thresholds,
+                                               replicates=args.bootstrap_replicates, seed=args.bootstrap_seed),
+            "horizons": {str(horizon): paired_daily_bootstrap(
+                aligned[args.baseline], records, thresholds, replicates=args.bootstrap_replicates,
+                seed=args.bootstrap_seed + horizon, horizon=horizon,
+            ) for horizon in horizons},
+        }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary = {"baseline": args.baseline, "thresholds_mm_15min": thresholds,
                "records": {name: int(len(records)) for name, records in aligned.items()},
                "valid_records": {name: int(records["is_observed"].sum()) for name, records in aligned.items()},
-               "metrics": reports, "paired_daily_bootstrap": bootstrap,
+               "metrics": reports, "skill_scores_against_baseline": skills,
+               "paired_daily_bootstrap": bootstrap,
                "bootstrap": {"replicates": args.bootstrap_replicates, "seed": args.bootstrap_seed,
                              "grouping": "target local day in America/Sao_Paulo"}}
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

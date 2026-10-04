@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from nowcasting.forecast_evaluation import (
-    align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold,
+    align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold, skill_scores,
 )
 
 
@@ -60,6 +60,13 @@ class ForecastEvaluationTests(unittest.TestCase):
         selected, report = select_decision_threshold(records(), 1.25, [0.5, 1.25, 2.5])
         self.assertEqual(selected, 1.25)
         self.assertAlmostEqual(report["csi"], 1 / 3)
+
+    def test_skill_scores_are_reported_for_global_and_horizons(self):
+        baseline = evaluate_records(records((0.0, 0.0, 0.0, 0.0)), [1.25])
+        candidate = evaluate_records(records((0.0, 2.0, 0.0, 2.0)), [1.25])
+        skill = skill_scores(baseline, candidate)
+        self.assertGreater(skill["global"]["mae_skill"], 0.0)
+        self.assertEqual(set(skill["horizons"]), {"1", "2"})
 
 
 if __name__ == "__main__":

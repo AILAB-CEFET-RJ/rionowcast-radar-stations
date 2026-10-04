@@ -170,6 +170,20 @@ def evaluate_records(records: pd.DataFrame, thresholds: Iterable[float]) -> dict
     return result
 
 
+def skill_scores(baseline: dict, candidate: dict) -> dict:
+    """Return regression skill scores relative to a common reference forecast."""
+    def score(reference: dict, current: dict) -> dict:
+        return {
+            "mae_skill": (1.0 - current["mae"] / reference["mae"]
+                          if reference["mae"] not in (None, 0) and current["mae"] is not None else None),
+            "rmse_skill": (1.0 - current["rmse"] / reference["rmse"]
+                           if reference["rmse"] not in (None, 0) and current["rmse"] is not None else None),
+        }
+    return {"global": score(baseline["global"], candidate["global"]),
+            "horizons": {horizon: score(baseline["horizons"][horizon], current)
+                         for horizon, current in candidate["horizons"].items()}}
+
+
 def daily_aggregates(records: pd.DataFrame, thresholds: Iterable[float], horizon: int | None = None) -> pd.DataFrame:
     valid = records.loc[records["is_observed"]].copy()
     valid["target_timestamp"] = pd.to_datetime(valid["target_timestamp"], utc=True, errors="raise")
@@ -204,11 +218,13 @@ def _csi_from_sums(hits: float, misses: float, false_alarms: float) -> float:
 
 def paired_daily_bootstrap(
     baseline: pd.DataFrame, candidate: pd.DataFrame, thresholds: Iterable[float], *, replicates: int, seed: int,
+    horizon: int | None = None,
 ) -> dict:
     """Bootstrap paired by local day from already aligned forecast records."""
     if replicates <= 0:
         return {}
-    base_daily, candidate_daily = daily_aggregates(baseline, thresholds), daily_aggregates(candidate, thresholds)
+    base_daily = daily_aggregates(baseline, thresholds, horizon=horizon)
+    candidate_daily = daily_aggregates(candidate, thresholds, horizon=horizon)
     if not base_daily.index.equals(candidate_daily.index):
         raise ValueError("Dias de bootstrap diferem entre previsão de referência e candidata.")
     rng, day_count = np.random.default_rng(seed), len(base_daily)
