@@ -84,38 +84,64 @@ def categorical_with_decision_threshold(
             "ets": ets, "hss": hss}
 
 
-def event_metrics(records: pd.DataFrame, threshold: float, *, gap_minutes: int = 15) -> dict:
-    """Evaluate contiguous station events using the available forecast schedule.
+def _event_segments(event: np.ndarray, timestamps: np.ndarray, gap_minutes: int) -> list[list[int]]:
+    """Return contiguous true segments, breaking them at gaps in the schedule."""
+    segments: list[list[int]] = []
+    current: list[int] = []
+    for index, is_event in enumerate(event):
+        contiguous = index and (timestamps[index] - timestamps[index - 1]) <= np.timedelta64(gap_minutes, "m")
+        if is_event and (not current or contiguous):
+            current.append(index)
+        elif is_event:
+            segments.append(current)
+            current = [index]
+        elif current:
+            segments.append(current)
+            current = []
+    if current:
+        segments.append(current)
+    return segments
 
-    An event is a contiguous observed exceedance at one station. Detection is
-    any thresholded forecast on an observed event timestep; lead is the largest
-    available horizon among detections. This is intentionally station-based and
-    does not claim a spatially continuous precipitation-event truth.
+
+def _municipal_records(records: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate station records to one municipal maximum per timestamp/horizon."""
+    valid = records.loc[records["is_observed"]].copy()
+    return valid.groupby(["year", "target_timestamp", "horizon"], as_index=False).agg(
+        station_id=("station_id", "first"),
+        predicted_mm_15min=("predicted_mm_15min", "max"),
+        observed_mm_15min=("observed_mm_15min", "max"),
+        is_observed=("is_observed", "all"),
+    )
+
+
+def event_metrics(
+    records: pd.DataFrame, threshold: float, *, gap_minutes: int = 15, scope: str = "station",
+) -> dict:
+    """Evaluate contiguous exceedance events by station or municipal maximum.
+
+    Municipal events are a clearly labelled operational proxy: the maximum of
+    the available station observations at each timestamp, not a spatially
+    continuous precipitation field.
     """
+    if scope not in {"station", "municipal"}:
+        raise ValueError("scope deve ser 'station' ou 'municipal'.")
     valid = records.loc[records["is_observed"]].copy()
     valid["target_timestamp"] = pd.to_datetime(valid["target_timestamp"], utc=True, errors="raise")
-    event_count = detected = false_alert_records = 0
+    if scope == "municipal":
+        valid = _municipal_records(valid)
+        valid["target_timestamp"] = pd.to_datetime(valid["target_timestamp"], utc=True, errors="raise")
+        valid["event_group"] = "municipal"
+    else:
+        valid["event_group"] = valid["station_id"].astype(str)
+    event_count = detected = false_alert_records = false_alert_events = 0
+    false_alert_days: set[str] = set()
     lead_minutes: list[float] = []
-    for _, group in valid.groupby("station_id", sort=False):
+    for _, group in valid.groupby("event_group", sort=False):
         group = group.sort_values("target_timestamp").reset_index(drop=True)
         observed_event = group["observed_mm_15min"].to_numpy() >= threshold
         forecast_event = group["predicted_mm_15min"].to_numpy() >= threshold
         timestamps = group["target_timestamp"].to_numpy()
-        event_indices: list[list[int]] = []
-        current: list[int] = []
-        for index, is_event in enumerate(observed_event):
-            contiguous = index and (timestamps[index] - timestamps[index - 1]) <= np.timedelta64(gap_minutes, "m")
-            if is_event and (not current or contiguous):
-                current.append(index)
-            elif is_event:
-                if current:
-                    event_indices.append(current)
-                current = [index]
-            elif current:
-                event_indices.append(current)
-                current = []
-        if current:
-            event_indices.append(current)
+        event_indices = _event_segments(observed_event, timestamps, gap_minutes)
         event_mask = np.zeros(len(group), dtype=bool)
         for indices in event_indices:
             event_count += 1
@@ -124,13 +150,18 @@ def event_metrics(records: pd.DataFrame, threshold: float, *, gap_minutes: int =
             if len(available):
                 detected += 1
                 lead_minutes.append(float(group.loc[available, "horizon"].max() * 15))
-        false_alert_records += int(np.sum(forecast_event & ~event_mask))
-    return {"threshold_mm_15min": threshold, "event_gap_minutes": gap_minutes,
+        false_mask = forecast_event & ~event_mask
+        false_alert_records += int(np.sum(false_mask))
+        false_alert_events += len(_event_segments(false_mask, timestamps, gap_minutes))
+        false_times = group.loc[false_mask, "target_timestamp"].dt.tz_convert("America/Sao_Paulo")
+        false_alert_days.update(false_times.dt.date.astype(str))
+    return {"scope": scope, "threshold_mm_15min": threshold, "event_gap_minutes": gap_minutes,
             "events": event_count, "detected_events": detected,
             "event_detection_fraction": detected / event_count if event_count else None,
             "median_detected_lead_minutes": float(np.median(lead_minutes)) if lead_minutes else None,
             "max_detected_lead_minutes": float(np.max(lead_minutes)) if lead_minutes else None,
-            "false_alert_records": false_alert_records}
+            "false_alert_records": false_alert_records, "false_alert_events": false_alert_events,
+            "false_alert_days": len(false_alert_days)}
 
 
 def select_decision_threshold(
@@ -154,13 +185,21 @@ def evaluate_records(records: pd.DataFrame, thresholds: Iterable[float]) -> dict
     valid = records.loc[records["is_observed"]]
     prediction = valid["predicted_mm_15min"].to_numpy(dtype=float)
     observed = valid["observed_mm_15min"].to_numpy(dtype=float)
-    result = {"global": _continuous(prediction, observed), "horizons": {}, "intensity": {}, "thresholds": {}}
+    result = {"global": _continuous(prediction, observed), "horizons": {}, "intensity": {}, "stations": {}, "thresholds": {}}
     for horizon, group in valid.groupby("horizon", sort=True):
         result["horizons"][str(int(horizon))] = _continuous(
             group["predicted_mm_15min"].to_numpy(float), group["observed_mm_15min"].to_numpy(float))
     for name, low, high in INTENSITY_BINS:
         selection = (observed >= low) & (observed < high)
         result["intensity"][name] = _continuous(prediction[selection], observed[selection])
+    for station_id, group in valid.groupby("station_id", sort=True):
+        station = {"global": _continuous(group["predicted_mm_15min"].to_numpy(float),
+                                           group["observed_mm_15min"].to_numpy(float)), "horizons": {}}
+        for horizon, horizon_group in group.groupby("horizon", sort=True):
+            station["horizons"][str(int(horizon))] = _continuous(
+                horizon_group["predicted_mm_15min"].to_numpy(float),
+                horizon_group["observed_mm_15min"].to_numpy(float))
+        result["stations"][str(station_id)] = station
     for threshold in thresholds:
         threshold_key = f"{threshold:g}"
         result["thresholds"][threshold_key] = {"global": _categorical(prediction, observed, threshold), "horizons": {}}
@@ -184,11 +223,17 @@ def skill_scores(baseline: dict, candidate: dict) -> dict:
                          for horizon, current in candidate["horizons"].items()}}
 
 
-def daily_aggregates(records: pd.DataFrame, thresholds: Iterable[float], horizon: int | None = None) -> pd.DataFrame:
+def daily_aggregates(
+    records: pd.DataFrame, thresholds: Iterable[float], horizon: int | None = None,
+    intensity: tuple[float, float] | None = None,
+) -> pd.DataFrame:
     valid = records.loc[records["is_observed"]].copy()
     valid["target_timestamp"] = pd.to_datetime(valid["target_timestamp"], utc=True, errors="raise")
     if horizon is not None:
         valid = valid.loc[valid["horizon"] == horizon]
+    if intensity is not None:
+        low, high = intensity
+        valid = valid.loc[(valid["observed_mm_15min"] >= low) & (valid["observed_mm_15min"] < high)]
     valid["local_day"] = valid["target_timestamp"].dt.tz_convert("America/Sao_Paulo").dt.date.astype(str)
     valid["error"] = valid["predicted_mm_15min"] - valid["observed_mm_15min"]
     output = valid.groupby("local_day", sort=True).agg(
@@ -218,18 +263,20 @@ def _csi_from_sums(hits: float, misses: float, false_alarms: float) -> float:
 
 def paired_daily_bootstrap(
     baseline: pd.DataFrame, candidate: pd.DataFrame, thresholds: Iterable[float], *, replicates: int, seed: int,
-    horizon: int | None = None,
+    horizon: int | None = None, intensity: tuple[float, float] | None = None,
 ) -> dict:
     """Bootstrap paired by local day from already aligned forecast records."""
     if replicates <= 0:
         return {}
-    base_daily = daily_aggregates(baseline, thresholds, horizon=horizon)
-    candidate_daily = daily_aggregates(candidate, thresholds, horizon=horizon)
+    base_daily = daily_aggregates(baseline, thresholds, horizon=horizon, intensity=intensity)
+    candidate_daily = daily_aggregates(candidate, thresholds, horizon=horizon, intensity=intensity)
     if not base_daily.index.equals(candidate_daily.index):
         raise ValueError("Dias de bootstrap diferem entre previsão de referência e candidata.")
     rng, day_count = np.random.default_rng(seed), len(base_daily)
     if not day_count:
-        raise ValueError("Não há dias observados para bootstrap.")
+        names = ["mae_difference", "rmse_difference", "skill_mae", "skill_rmse"]
+        names.extend(f"csi_difference_threshold_{threshold:g}" for threshold in thresholds)
+        return {name: {"estimate": None, "ci95": [None, None]} for name in names}
     outcomes = {"mae_difference": [], "rmse_difference": [], "skill_mae": [], "skill_rmse": []}
     for threshold in thresholds:
         outcomes[f"csi_difference_threshold_{threshold:g}"] = []

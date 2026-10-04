@@ -55,6 +55,16 @@ class ForecastEvaluationTests(unittest.TestCase):
         self.assertEqual(report["events"], 2)
         self.assertEqual(report["detected_events"], 1)
         self.assertEqual(report["false_alert_records"], 1)
+        self.assertEqual(report["false_alert_events"], 1)
+        self.assertEqual(report["false_alert_days"], 1)
+
+    def test_municipal_event_metrics_aggregate_station_maximum(self):
+        second_station = records((0.0, 0.0, 0.0, 0.0))
+        second_station["station_id"] = 2
+        report = event_metrics(pd.concat([records(), second_station], ignore_index=True), 1.25, scope="municipal")
+        self.assertEqual(report["scope"], "municipal")
+        self.assertEqual(report["events"], 2)
+        self.assertEqual(report["detected_events"], 1)
 
     def test_decision_threshold_is_selected_only_from_candidate_grid(self):
         selected, report = select_decision_threshold(records(), 1.25, [0.5, 1.25, 2.5])
@@ -67,6 +77,17 @@ class ForecastEvaluationTests(unittest.TestCase):
         skill = skill_scores(baseline, candidate)
         self.assertGreater(skill["global"]["mae_skill"], 0.0)
         self.assertEqual(set(skill["horizons"]), {"1", "2"})
+
+    def test_station_metrics_and_intensity_bootstrap_are_available(self):
+        baseline = records((0.0, 0.0, 0.0, 0.0))
+        candidate = records((0.0, 2.0, 0.0, 2.0))
+        report = evaluate_records(candidate, [1.25])
+        self.assertEqual(set(report["stations"]), {"1"})
+        self.assertEqual(report["stations"]["1"]["global"]["n"], 4)
+        bootstrap = paired_daily_bootstrap(
+            baseline, candidate, [1.25], replicates=20, seed=7, intensity=(1.25, 6.25),
+        )
+        self.assertGreater(bootstrap["skill_mae"]["estimate"], 0.0)
 
 
 if __name__ == "__main__":

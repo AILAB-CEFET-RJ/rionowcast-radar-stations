@@ -76,10 +76,12 @@ nowcasting-evaluate-forecast-records \
   --output-dir outputs/analysis/evaluation/audited_v1
 ```
 
-O comando produz MAE, RMSE e viés globais, por horizonte e por intensidade;
+O comando produz MAE, RMSE e viés globais, por horizonte, intensidade e estação;
 POD, FAR, razão de sucesso, CSI, viés de frequência, ETS e HSS por limiar;
-intervalos de confiança de bootstrap pareado por dia local; e um diagrama de
-desempenho por limiar. O bootstrap reamostra dias completos em
+intervalos de confiança de bootstrap pareado por dia local, inclusive por
+intensidade; e um diagrama de desempenho por limiar. Além do `summary.json`, a
+saída contém `report.md`, `report.tex`, tabelas CSV contínuas, categóricas, de
+skill e de bootstrap. O bootstrap reamostra dias completos em
 `America/Sao_Paulo`, preservando a dependência entre estações, horizontes e
 janelas de um mesmo dia.
 
@@ -94,10 +96,12 @@ nowcasting-evaluate-forecast-events \
   --output outputs/analysis/evaluation/audited_v1/events.json
 ```
 
-Os eventos são definidos por estação como excedências observadas contíguas. A
-saída informa fração de eventos detectados, antecedência disponível e falsos
-alertas por registro. Ela não é uma métrica espacial de campo; FSS permanece
-fora do escopo enquanto não houver precipitação observada em grade densa.
+Por padrão, a saída inclui duas perspectivas: eventos por estação, definidos
+por excedências observadas contíguas, e um proxy municipal definido pelo máximo
+entre as estações em cada instante. Para ambos, informa fração de eventos
+detectados, antecedência disponível, falsos alertas por registro, por evento e
+por dia. O proxy municipal não é um campo espacial de precipitação; FSS
+permanece fora do escopo enquanto não houver observação em grade densa.
 
 Para calibrar um limiar de alerta, forneça Parquets de validação e de teste
 separados. O comando seleciona o limiar apenas na validação e o congela no
@@ -114,3 +118,28 @@ nowcasting-calibrate-alert-thresholds \
 
 Essa calibração afeta somente a decisão categórica de alerta. MAE, RMSE e viés
 devem continuar sendo apresentados sem ajuste posterior.
+
+## Múltiplas seeds
+
+Para redes neurais, execute pelo menos três seeds independentes. O planejador
+gera somente um script explícito, sem submetê-lo automaticamente ao PBS:
+
+```bash
+nowcasting-plan-seed-runs \
+  --seeds 101,202,303 \
+  --run-prefix C3-audited-v3 \
+  --command-template 'python -u -m nowcasting.cli.train --seed {seed} --run-name {run_name} ...' \
+  --output scripts/run_c3_seeds.sh
+```
+
+Após exportar previsões e avaliar cada seed separadamente, consolide apenas as
+métricas de `summary.json`; nunca concatene previsões de seeds diferentes:
+
+```bash
+nowcasting-aggregate-seed-evaluations \
+  --summary 101=outputs/analysis/C3-seed-101/summary.json \
+  --summary 202=outputs/analysis/C3-seed-202/summary.json \
+  --summary 303=outputs/analysis/C3-seed-303/summary.json \
+  --experiment C3 \
+  --output-dir outputs/analysis/C3-seed-aggregate
+```
