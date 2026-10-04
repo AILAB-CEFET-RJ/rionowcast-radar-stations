@@ -15,6 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from nowcasting.dataset import RadarStationMemmapDataset, parse_years
+from nowcasting.forecast_records import export_flat_station_forecasts
 from nowcasting.optical_flow import extrapolate_visual_echo, station_echo_features
 from nowcasting.paths import project_root
 from nowcasting.station_dataset import load_station_pixels
@@ -40,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None, help="Limita amostras por split; somente para smoke tests.")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs" / "experiments")
     parser.add_argument("--run-name", default=None)
+    parser.add_argument("--forecast-records", type=Path,
+                        help="Parquet opcional para avaliação pareada por estação e horizonte.")
     return parser.parse_args()
 
 
@@ -138,14 +141,21 @@ def main() -> None:
         candidates.append((alpha, fitted, validation))
         print(f"alpha={alpha:g} | val_mae={validation['global']['mae']:.6f}", flush=True)
     alpha, fitted, validation = min(candidates, key=lambda item: item[2]["global"]["mae"])
-    test_metrics = metrics(predict(fitted, test_x, args.step, len(station_ids)), test_y, test_m, args.step, len(station_ids))
+    test_prediction = predict(fitted, test_x, args.step, len(station_ids))
+    test_metrics = metrics(test_prediction, test_y, test_m, args.step, len(station_ids))
     run_dir = args.output_dir / (args.run_name or f"B2a-optical-flow-{datetime.now():%Y%m%d-%H%M%S}")
     run_dir.mkdir(parents=True, exist_ok=False)
     configuration = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     configuration.update({"train_years": train_years, "val_years": val_years, "test_years": test_years, "station_ids": station_ids, "pysteps_version": version("pysteps"), "opencv_python_headless_version": version("opencv-python-headless"), "motion": "pysteps Lucas-Kanade", "extrapolation": "pysteps semilagrangian", "echo_proxy": "max(R,G,B)/255; visual, not calibrated reflectivity"})
     (run_dir / "configuration.json").write_text(json.dumps(configuration, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     joblib.dump(fitted, run_dir / "ridge_readouts.joblib")
+    records = None
+    if args.forecast_records:
+        records = export_flat_station_forecasts(test_dataset := datasets[2], pixels, station_ids, test_prediction,
+                                                args.forecast_records, experiment_id=args.run_name or run_dir.name)
     summary = {"model": "optical-flow-rgb-calibrated-readout", "selected_ridge_alpha": alpha, "validation_candidates": [{"alpha": item[0], "metrics": item[2]} for item in candidates], "validation_metrics": validation, "test_metrics": test_metrics, "flow_fallbacks": {"train": train_fallbacks, "val": val_fallbacks, "test": test_fallbacks}}
+    if records:
+        summary["forecast_records"] = records | {"path": str(args.forecast_records)}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Complete | alpha={alpha:g} | test={test_metrics['global']}", flush=True)
 

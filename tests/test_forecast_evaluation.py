@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+import pandas as pd
+
+
+PROJECT_ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from nowcasting.forecast_evaluation import (
+    align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold,
+)
+
+
+def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
+    return pd.DataFrame({
+        "year": [2023] * 4,
+        "target_timestamp": ["2023-01-01T00:00:00Z", "2023-01-01T00:15:00Z",
+                             "2023-01-02T00:00:00Z", "2023-01-02T00:15:00Z"],
+        "horizon": [1, 2, 1, 2], "station_id": [1] * 4,
+        "predicted_mm_15min": prediction, "observed_mm_15min": [0.0, 2.0, 0.0, 2.0],
+        "is_observed": [True] * 4,
+    })
+
+
+class ForecastEvaluationTests(unittest.TestCase):
+    def test_categorical_metrics_match_known_contingency_table(self):
+        metrics = evaluate_records(records(), [1.25])
+        categorical = metrics["thresholds"]["1.25"]["global"]
+        self.assertEqual((categorical["hits"], categorical["misses"], categorical["false_alarms"], categorical["correct_negatives"]), (1, 1, 1, 1))
+        self.assertAlmostEqual(categorical["pod"], 0.5)
+        self.assertAlmostEqual(categorical["far"], 0.5)
+        self.assertAlmostEqual(categorical["csi"], 1 / 3)
+        self.assertAlmostEqual(categorical["frequency_bias"], 1.0)
+
+    def test_alignment_rejects_different_masks(self):
+        changed = records()
+        changed.loc[0, "is_observed"] = False
+        with self.assertRaisesRegex(ValueError, "máscara"):
+            align_records({"B1": records(), "C1": changed})
+
+    def test_daily_bootstrap_is_deterministic_and_reports_skill(self):
+        baseline = records((0.0, 0.0, 0.0, 0.0))
+        candidate = records((0.0, 2.0, 0.0, 2.0))
+        first = paired_daily_bootstrap(baseline, candidate, [1.25], replicates=50, seed=7)
+        second = paired_daily_bootstrap(baseline, candidate, [1.25], replicates=50, seed=7)
+        self.assertEqual(first, second)
+        self.assertGreater(first["skill_mae"]["estimate"], 0.0)
+
+    def test_event_metrics_groups_contiguous_exceedances_by_station(self):
+        report = event_metrics(records(), 1.25)
+        self.assertEqual(report["events"], 2)
+        self.assertEqual(report["detected_events"], 1)
+        self.assertEqual(report["false_alert_records"], 1)
+
+    def test_decision_threshold_is_selected_only_from_candidate_grid(self):
+        selected, report = select_decision_threshold(records(), 1.25, [0.5, 1.25, 2.5])
+        self.assertEqual(selected, 1.25)
+        self.assertAlmostEqual(report["csi"], 1 / 3)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -14,6 +14,7 @@ from nowcasting.cli.evaluate_optical_flow import (
     PROJECT_ROOT, fit_models, metrics, predict, validate_splits,
 )
 from nowcasting.dataset import RadarStationMemmapDataset, parse_years
+from nowcasting.forecast_records import export_flat_station_forecasts
 from nowcasting.optical_flow import (
     extrapolate_visual_echo, station_echo_features, station_persistence_from_history,
 )
@@ -38,6 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None, help="Limita amostras por split; somente para smoke tests.")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs" / "experiments")
     parser.add_argument("--run-name", default=None)
+    parser.add_argument("--forecast-records", type=Path,
+                        help="Parquet opcional para avaliação pareada por estação e horizonte.")
     return parser.parse_args()
 
 
@@ -118,7 +121,8 @@ def main() -> None:
             print(f"alpha={alpha:g} | peso_fluxo={weight:.2f} | val_mae={validation['global']['mae']:.6f}", flush=True)
     alpha, weight, fitted, validation = min(candidates, key=lambda item: item[3]["global"]["mae"])
     test_optical = predict(fitted, test_x, args.step, len(station_ids))
-    test_metrics = metrics(blend(test_optical, test_persistence, weight), test_y, test_m, args.step, len(station_ids))
+    test_prediction = blend(test_optical, test_persistence, weight)
+    test_metrics = metrics(test_prediction, test_y, test_m, args.step, len(station_ids))
     run_dir = args.output_dir / (args.run_name or f"B2b-optical-flow-persistence-{datetime.now():%Y%m%d-%H%M%S}")
     run_dir.mkdir(parents=True, exist_ok=False)
     configuration = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
@@ -130,12 +134,18 @@ def main() -> None:
                           "blend": "weight * optical-flow precipitation + (1 - weight) * B1 persistence precipitation"})
     (run_dir / "configuration.json").write_text(json.dumps(configuration, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     joblib.dump(fitted, run_dir / "ridge_readouts.joblib")
+    records = None
+    if args.forecast_records:
+        records = export_flat_station_forecasts(datasets[2], pixels, station_ids, test_prediction,
+                                                args.forecast_records, experiment_id=args.run_name or run_dir.name)
     summary = {"model": "optical-flow-rgb-persistence-blend", "selected_ridge_alpha": alpha,
                "selected_optical_flow_weight": weight, "validation_candidates": [
                    {"alpha": item[0], "optical_flow_weight": item[1], "metrics": item[3]} for item in candidates],
                "validation_metrics": validation, "test_metrics": test_metrics,
                "flow_fallbacks": {"train": train_fallbacks, "val": val_fallbacks, "test": test_fallbacks},
                "stations_without_input_history": {"train": train_missing, "val": val_missing, "test": test_missing}}
+    if records:
+        summary["forecast_records"] = records | {"path": str(args.forecast_records)}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Complete | alpha={alpha:g} | peso_fluxo={weight:.2f} | test={test_metrics['global']}", flush=True)
 

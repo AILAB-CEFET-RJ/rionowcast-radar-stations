@@ -159,6 +159,9 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
   calibrada por estação, sem uso de targets futuros como entrada.
 - [x] Implementar B2b: combinação de B2a e persistência por estação, com
   seleção conjunta de peso e Ridge exclusivamente na validação.
+- [x] Implementar registros canônicos Parquet e avaliador pareado com métricas
+  contínuas, categóricas, bootstrap diário, diagramas de desempenho, eventos
+  por estação e calibração de limiar isolada na validação.
 - [ ] Executar B2a no split cronológico 2012--2021 / 2022 / 2023--2024,
   com `stride=5`, e registrar fallbacks do fluxo óptico.
 - [ ] Executar B2b no mesmo split, selecionando `alpha` e o peso da mistura
@@ -167,6 +170,11 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
   válidos no teste antes de comparar métricas.
 - [ ] Comparar B2a e B2b com B1, C1 e C3 por horizonte e intensidade,
   destacando T+45--T+75 e as classes moderada, forte e extrema.
+- [ ] Repetir C1 e C3 com ao menos três seeds e reportar variação entre seeds
+  separadamente do bootstrap meteorológico por dia.
+- [ ] Após construir dataset auditável para 2025--2026, definir um novo split
+  cronológico sem alterar o teste histórico já publicado e repetir a avaliação
+  com registros canônicos.
 - [x] Implementar modelo temporal multivariado somente com estações.
 - [x] Registrar métricas globais e por horizonte para cada estação nos novos
   runners de radar e somente-estações.
