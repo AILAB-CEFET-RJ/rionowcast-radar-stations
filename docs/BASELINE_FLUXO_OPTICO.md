@@ -54,9 +54,44 @@ Os artefatos são salvos em `outputs/experiments/$run/`: configuração,
 `summary.json` com a seleção de `alpha` e métricas, e
 `ridge_readouts.joblib` com as cinco Ridge ajustadas.
 
+## B2b: fluxo óptico + persistência
+
+`nowcasting-evaluate-optical-flow-blend` combina B2a com B1. Para cada
+estação, B1 repete a última chuva observada nos cinco instantes de entrada;
+B2a fornece a leitura calibrada do campo advectado. A combinação é feita em
+mm/15 min, não no espaço `log1p`:
+
+```text
+previsão = peso_fluxo * B2a + (1 - peso_fluxo) * B1
+```
+
+O peso e `alpha` são selecionados conjuntamente pelo MAE de 2022. Portanto,
+a avaliação de 2023--2024 não participa da escolha de hiperparâmetros. Peso
+zero significa persistência pura; peso um significa B2a pura.
+
+```bash
+dataset=data/datasets/radar_sumare_2012_2024_15min_128_audited_v3
+run=B2b-optical-flow-persistence-audited-v3-$(date +%Y%m%d)
+
+CUDA_VISIBLE_DEVICES="" nowcasting-evaluate-optical-flow-blend \
+  --dataset-root "$dataset" \
+  --mapping configs/mapeamento_pixel_estacao_alertario_historical_v1.csv \
+  --mapping-height-orig 654 \
+  --mapping-width-orig 656 \
+  --train-years 2012-2021 \
+  --val-years 2022 \
+  --test-years 2023-2024 \
+  --step 5 \
+  --stride 5 \
+  --neighborhood-radius 2 \
+  --ridge-alphas 0.1,1,10 \
+  --blend-weights 0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1 \
+  --run-name "$run"
+```
+
 ## Critérios de comparação
 
-Compare B2a com B1, C1 e C3 somente quando os arquivos de resumo declararem
+Compare B2a e B2b com B1, C1 e C3 somente quando os arquivos de resumo declararem
 os mesmos splits, continuidade temporal e número de pares válidos de teste.
 Avalie especialmente os horizontes T+45, T+60 e T+75 e as faixas moderada,
 forte e extrema: métricas globais são dominadas por períodos secos.

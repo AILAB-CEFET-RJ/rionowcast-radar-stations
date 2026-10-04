@@ -10,8 +10,11 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from nowcasting.optical_flow import extrapolate_visual_echo, station_echo_features, visual_echo
+from nowcasting.optical_flow import (
+    extrapolate_visual_echo, station_echo_features, station_persistence_from_history, visual_echo,
+)
 from nowcasting.cli.evaluate_optical_flow import metrics
+from nowcasting.cli.evaluate_optical_flow_blend import blend
 
 
 class OpticalFlowTests(unittest.TestCase):
@@ -44,6 +47,18 @@ class OpticalFlowTests(unittest.TestCase):
         self.assertEqual(result["global"]["n"], 3)
         self.assertEqual(result["horizons"][0]["n"], 2)
         self.assertEqual(result["horizons"][1]["n"], 1)
+
+    def test_station_persistence_uses_last_available_value_and_zero_for_missing_history(self):
+        values = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]], dtype=np.float32)
+        masks = np.array([[1, 0], [0, 0], [1, 0]], dtype=bool)
+        forecast, missing = station_persistence_from_history(values, masks, horizons=2)
+        np.testing.assert_allclose(forecast, [[0.5, 0.0], [0.5, 0.0]])
+        self.assertEqual(missing, 1)
+
+    def test_blend_interpolates_in_physical_precipitation_space(self):
+        optical = np.log1p(np.array([4.0]))
+        persistence = np.log1p(np.array([2.0]))
+        np.testing.assert_allclose(np.expm1(blend(optical, persistence, 0.25)), [2.5])
 
 
 if __name__ == "__main__":

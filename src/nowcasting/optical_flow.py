@@ -64,3 +64,23 @@ def station_echo_features(
         result[:, station, 1] = window.max(axis=(1, 2))
         result[:, station, 2] = (window > 0).mean(axis=(1, 2))
     return result
+
+
+def station_persistence_from_history(
+    values: np.ndarray, masks: np.ndarray, horizons: int,
+) -> tuple[np.ndarray, int]:
+    """Repeat the last observed station value in a causal input history.
+
+    ``values`` and ``masks`` have shape ``(time, station)`` and values are in
+    the target's log1p space. Stations with no observed input receive zero,
+    matching the B1 persistence convention.
+    """
+    history = np.asarray(values, dtype=np.float32)
+    observed = np.asarray(masks, dtype=bool)
+    if history.ndim != 2 or observed.shape != history.shape or horizons <= 0:
+        raise ValueError("Histórico de estações, máscara ou horizontes inválidos.")
+    positions = np.where(observed, np.arange(history.shape[0])[:, None], -1).max(axis=0)
+    result = np.zeros(history.shape[1], dtype=np.float32)
+    available = positions >= 0
+    result[available] = history[positions[available], np.flatnonzero(available)]
+    return np.broadcast_to(result, (horizons, len(result))).copy(), int((~available).sum())

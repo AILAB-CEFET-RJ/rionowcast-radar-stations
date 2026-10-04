@@ -157,6 +157,8 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
 - [x] Implementar persistência por estação como baseline sem radar.
 - [x] Implementar B2a: fluxo óptico causal do proxy RGB do radar e leitura
   calibrada por estação, sem uso de targets futuros como entrada.
+- [x] Implementar B2b: combinação de B2a e persistência por estação, com
+  seleção conjunta de peso e Ridge exclusivamente na validação.
 - [x] Implementar modelo temporal multivariado somente com estações.
 - [x] Registrar métricas globais e por horizonte para cada estação nos novos
   runners de radar e somente-estações.
