@@ -27,7 +27,9 @@ python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
 
-`pysteps` requer OpenCV; ambos constam de `requirements.txt`.
+`pysteps` requer OpenCV; ambos constam de `requirements.txt` com versões
+fixadas. Os dois avaliadores também gravam as versões efetivas no
+`configuration.json` de cada experimento.
 
 ## Experimento multianual
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime
+from importlib.metadata import version
 from pathlib import Path
 
 import joblib
@@ -122,7 +123,9 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=False)
     configuration = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     configuration.update({"train_years": train_years, "val_years": val_years, "test_years": test_years,
-                          "station_ids": station_ids, "motion": "pysteps Lucas-Kanade",
+                          "station_ids": station_ids, "pysteps_version": version("pysteps"),
+                          "opencv_python_headless_version": version("opencv-python-headless"),
+                          "motion": "pysteps Lucas-Kanade",
                           "extrapolation": "pysteps semilagrangian",
                           "blend": "weight * optical-flow precipitation + (1 - weight) * B1 persistence precipitation"})
     (run_dir / "configuration.json").write_text(json.dumps(configuration, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

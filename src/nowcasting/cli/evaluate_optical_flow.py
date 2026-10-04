@@ -142,7 +142,7 @@ def main() -> None:
     run_dir = args.output_dir / (args.run_name or f"B2a-optical-flow-{datetime.now():%Y%m%d-%H%M%S}")
     run_dir.mkdir(parents=True, exist_ok=False)
     configuration = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
-    configuration.update({"train_years": train_years, "val_years": val_years, "test_years": test_years, "station_ids": station_ids, "pysteps_version": version("pysteps"), "motion": "pysteps Lucas-Kanade", "extrapolation": "pysteps semilagrangian", "echo_proxy": "max(R,G,B)/255; visual, not calibrated reflectivity"})
+    configuration.update({"train_years": train_years, "val_years": val_years, "test_years": test_years, "station_ids": station_ids, "pysteps_version": version("pysteps"), "opencv_python_headless_version": version("opencv-python-headless"), "motion": "pysteps Lucas-Kanade", "extrapolation": "pysteps semilagrangian", "echo_proxy": "max(R,G,B)/255; visual, not calibrated reflectivity"})
     (run_dir / "configuration.json").write_text(json.dumps(configuration, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     joblib.dump(fitted, run_dir / "ridge_readouts.joblib")
     summary = {"model": "optical-flow-rgb-calibrated-readout", "selected_ridge_alpha": alpha, "validation_candidates": [{"alpha": item[0], "metrics": item[2]} for item in candidates], "validation_metrics": validation, "test_metrics": test_metrics, "flow_fallbacks": {"train": train_fallbacks, "val": val_fallbacks, "test": test_fallbacks}}
