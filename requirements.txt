@@ -17,3 +17,5 @@ jupyter
 ipykernel
 netCDF4
 s3fs
+pysteps
+opencv-python-headless

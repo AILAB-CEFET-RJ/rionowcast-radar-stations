@@ -155,6 +155,8 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
   checkpoints retomáveis.
 - [ ] Executar M2 e M4 equivalentes usando o crop, com o mesmo split temporal.
 - [x] Implementar persistência por estação como baseline sem radar.
+- [x] Implementar B2a: fluxo óptico causal do proxy RGB do radar e leitura
+  calibrada por estação, sem uso de targets futuros como entrada.
 - [x] Implementar modelo temporal multivariado somente com estações.
 - [x] Registrar métricas globais e por horizonte para cada estação nos novos
   runners de radar e somente-estações.
@@ -178,6 +180,13 @@ globais, por horizonte e por intensidade dos experimentos de radar.
 `nowcasting-compare` consolida resultados em `comparison.json` e
 `comparison.md`; métricas por estação só são comparadas quando todos os
 experimentos fornecidos as possuem.
+
+O baseline B2a usa os cinco frames RGB passados para estimar movimento pelo
+Lucas-Kanade do `pysteps`, extrapola o proxy visual `max(R,G,B)/255` e extrai
+média, máximo e fração não nula ao redor de cada estação. Uma Ridge por
+horizonte, ajustada exclusivamente no treino, converte essas features em
+`log1p(mm/15min)`. Ele é uma referência de advecção visual e leitura
+calibrada, não uma conversão de RGB para refletividade física.
 
 ### Matriz Experimental
 
