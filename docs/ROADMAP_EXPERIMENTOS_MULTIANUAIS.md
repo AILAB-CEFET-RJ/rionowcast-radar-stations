@@ -74,7 +74,7 @@ O protocolo, limiares iniciais e comandos estão documentados em
 WebSirene não deve ser usada como supervisão até a conclusão dos dois itens
 pendentes acima.
 
-### GOES-16 ABI
+### GOES ABI: histórico GOES-16 e transição operacional para GOES-19
 
 - [x] Definir contrato causal V2 e CLIs para download retomável, memmaps
   alinhados ao radar e auditoria de cobertura.
@@ -82,11 +82,23 @@ pendentes acima.
   retenção dos NetCDFs Full Disk.
 - [x] Executar smoke test C13 e aprovar cobertura, georreferenciamento e
   `causality_errors=0`.
-- [x] Processar e auditar C13 em 2022 (99,57\% de cobertura) e 2023 (99,69\%),
-  ambos sem erro causal.
-- [ ] Processar e auditar C13 em 2018--2021 e 2024.
+- [x] Processar e auditar C13 em 2022 (99,57\%), 2023 (99,69\%) e 2024
+  (99,21\%), todos sem erro causal.
+- [ ] Processar e auditar C13 em 2018--2021.
 - [ ] Comparar C3 restrito (2018--2024) com radar + estações lagadas + ABI.
 - [ ] Integrar GLM somente após estabelecer o ganho marginal dos canais ABI.
+- [ ] Criar contrato GOES-19 para o bucket `noaa-goes19`, preservando a seleção
+  causal por término de cena e registrando satélite, configuração e grade nos
+  metadados.
+- [ ] Gerar e auditar GOES-19 a partir de 2025, com cobertura, causalidade e
+  georreferenciamento avaliados separadamente do acervo GOES-16.
+- [ ] Comparar distribuições e produto reprojetado de GOES-16 e GOES-19 no
+  período de transição ou sobreposição disponível; validar se normalização fixa
+  é suficiente ou se o modelo exige ajuste fino com GOES-19.
+- [ ] Estender a inferência operacional para adquirir, reprojetar e validar as
+  cenas GOES-19 causais exigidas pelo checkpoint multimodal.
+- [ ] Liberar uso operacional multimodal somente após validação ponta a ponta
+  com GOES-19; o CLI operacional atual rejeita checkpoints com `--input-goes`.
 
 O contrato V2 seleciona por canal a cena cujo término seja anterior ou igual ao
 início da janela de radar. A configuração multicanal usa os canais
@@ -95,6 +107,11 @@ isoladamente. O pipeline mantém os produtos GOES separados do memmap de radar
 e descarta qualquer janela de entrada sem todos os canais causais disponíveis.
 Consulte
 [`PIPELINE_GOES16_AUDITAVEL.md`](PIPELINE_GOES16_AUDITAVEL.md).
+
+GOES-16 é a fonte histórica do experimento, pois foi GOES-East de dezembro de
+2017 a abril de 2025. GOES-19 assumiu GOES-East em abril de 2025 e deve ser a
+fonte do fluxo operacional futuro; não deve, contudo, substituir silenciosamente
+GOES-16 nos datasets históricos ou em checkpoints treinados somente com ele.
 
 ### Proveniência AlertaRio
 
