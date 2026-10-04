@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from nowcasting.forecast_evaluation import align_records, evaluate_records, paired_daily_bootstrap, skill_scores
@@ -20,6 +21,15 @@ def named_path(value: str) -> tuple[str, Path]:
 
 def performance_diagram(metrics: dict[str, dict], threshold: str, output: Path) -> None:
     figure, axis = plt.subplots(figsize=(7, 6))
+    success_ratio, pod = np.meshgrid(np.linspace(0.01, 1.0, 200), np.linspace(0.01, 1.0, 200))
+    csi = 1.0 / (1.0 / success_ratio + 1.0 / pod - 1.0)
+    contours = axis.contour(success_ratio, pod, csi, levels=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9),
+                            colors="0.7", linewidths=0.7)
+    axis.clabel(contours, inline=True, fontsize=7, fmt="CSI %.1f")
+    for bias in (0.25, 0.5, 1.0, 2.0, 4.0):
+        x = np.linspace(max(0.01, 0.01 / bias), min(1.0, 1.0 / bias), 100)
+        axis.plot(x, bias * x, color="0.82", linestyle="--", linewidth=0.7)
+        axis.text(x[-1], bias * x[-1], f"B={bias:g}", color="0.5", fontsize=7, ha="right", va="bottom")
     for name, report in metrics.items():
         item = report["thresholds"][threshold]["global"]
         if item["pod"] is not None and item["success_ratio"] is not None:
