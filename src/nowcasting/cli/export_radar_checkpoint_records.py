@@ -11,6 +11,7 @@ import torch
 from nowcasting.cli.train import model_class
 from nowcasting.dataset import RadarStationMemmapDataset
 from nowcasting.forecast_records import export_flat_station_forecasts
+from nowcasting.residual_persistence import build_forecaster
 from nowcasting.station_dataset import load_station_pixels
 
 
@@ -61,10 +62,14 @@ def main() -> None:
     )
     pixels, ids = station_pixels(dataset, configuration)
     sample_x, sample_y, _ = dataset[0]
-    constructor = model_class(Path(configuration["stconvs2s_root"]))
-    model = constructor((1, *sample_x.shape), int(configuration["num_layers"]), int(configuration["hidden_dim"]),
-                        int(configuration["kernel_size"]), device, 0.0, int(configuration["step"]),
-                        output_channels=sample_y.shape[0]).to(device)
+    constructor = model_class(Path(configuration["stconvs2s_root"]), configuration["model"])
+    model = build_forecaster(
+        constructor, sample_x, sample_y, num_layers=int(configuration["num_layers"]),
+        hidden_dim=int(configuration["hidden_dim"]), kernel_size=int(configuration["kernel_size"]),
+        device=device, step=int(configuration["step"]),
+        forecast_formulation=configuration.get("forecast_formulation", "direct"),
+        input_stations=bool(configuration["input_stations"]),
+    ).to(device)
     state = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(state["model_state_dict"])
     model.eval()

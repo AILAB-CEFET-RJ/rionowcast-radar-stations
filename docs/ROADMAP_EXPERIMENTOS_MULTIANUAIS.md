@@ -175,6 +175,16 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
   destacando T+45--T+75 e as classes moderada, forte e extrema.
 - [ ] Repetir C1 e C3 com ao menos três seeds e reportar variação entre seeds
   separadamente do bootstrap meteorológico por dia.
+- [x] Implementar C3R: STConvS2S residual sobre persistência causal por estação,
+  sem modificar o repositório externo da arquitetura.
+- [ ] Executar C3R com três seeds e comparar com B1, C1 e C3 no mesmo teste,
+  priorizando T+45--T+75 e métricas de eventos intensos.
+- [ ] Projetar a inferência operacional de C3R: obter leituras recentes das
+  estações, aplicar a mesma convenção temporal e construir a persistência
+  causal sem usar observações futuras.
+- [ ] Validar em modo sombra a disponibilidade, a latência e o tratamento de
+  máscaras das estações; registrar a fração de previsões cuja persistência
+  parte de histórico ausente antes de liberar C3R para operação.
 - [ ] Exportar registros canônicos alinhados de B1, B2a, B2b, C1, C2 e C3 e
   gerar a avaliação completa: métricas contínuas, categóricas por limiar,
   skill contra B1, intervalos de confiança e diagramas de desempenho.
