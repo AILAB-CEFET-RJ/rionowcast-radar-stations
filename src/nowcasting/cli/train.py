@@ -35,6 +35,7 @@ from nowcasting.losses import (
     WeightedMaskedMAELoss,
 )
 from nowcasting.station_dataset import load_station_pixels
+from nowcasting.residual_persistence import build_forecaster
 from nowcasting.paths import project_root
 
 
@@ -55,7 +56,7 @@ RESUME_CONFIG_KEYS = (
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
-    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "crop",
+    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "forecast_formulation", "crop",
     "radar_capture_preprocessing", "goes_preprocessing",
 )
 
@@ -126,6 +127,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--input-goes", action="store_true",
         help="Acrescenta canais GOES-16 causalmente alinhados ao radar; requer year=*/goes16.",
+    )
+    parser.add_argument(
+        "--forecast-formulation", choices=("direct", "residual-persistence"), default="direct",
+        help="direct prevê chuva diretamente; residual-persistence soma correção do radar à persistência causal B1.",
     )
     parser.add_argument(
         "--station-mapping", type=Path,
@@ -326,7 +331,8 @@ def criterion_from_args(args: argparse.Namespace, weights: tuple[float, ...]):
     return WeightedMaskedHuberLoss(args.huber_delta, weights)
 
 
-def empty_stats(horizons: int, station_locations: list[tuple[int, int, int]] | None = None) -> dict:
+def empty_stats(horizons: int, station_locations: list[tuple[int, int, int]] | None = None,
+                residual_persistence: bool = False) -> dict:
     stats = {
         "global": {"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0},
         "horizons": [{"se": 0.0, "ae": 0.0, "bias": 0.0, "n": 0} for _ in range(horizons)],
@@ -341,6 +347,8 @@ def empty_stats(horizons: int, station_locations: list[tuple[int, int, int]] | N
             }
             for station_id, _, _ in station_locations
         }
+    if residual_persistence:
+        stats["persistence_history"] = {"valid_pairs": 0, "pairs_without_history": 0}
     return stats
 
 
@@ -376,6 +384,16 @@ def update_stats(stats: dict, output: torch.Tensor, target: torch.Tensor, mask: 
                 accumulate(destination, station_valid[:, :, index], station_error[:, :, index])
 
 
+def update_persistence_history_stats(stats: dict, inputs: torch.Tensor, mask: torch.Tensor) -> None:
+    """Count valid target pairs whose causal station history is entirely missing."""
+    history_available = inputs[:, -1].bool().any(dim=1)
+    valid = mask.bool()
+    missing_history = ~history_available[:, None, None]
+    summary = stats["persistence_history"]
+    summary["valid_pairs"] += int(valid.sum().item())
+    summary["pairs_without_history"] += int((valid & missing_history).sum().item())
+
+
 def finalized_stats(stats: dict) -> dict:
     def finalize(value: dict) -> dict:
         n = value["n"]
@@ -394,6 +412,15 @@ def finalized_stats(stats: dict) -> dict:
                          "horizons": [finalize(item) for item in values["horizons"]]}
             for station_id, values in stats["stations"].items()
         }
+    if "persistence_history" in stats:
+        history = stats["persistence_history"]
+        valid_pairs = history["valid_pairs"]
+        missing_pairs = history["pairs_without_history"]
+        result["persistence_history"] = {
+            "valid_pairs": valid_pairs,
+            "pairs_without_history": missing_pairs,
+            "fraction_without_history": missing_pairs / valid_pairs if valid_pairs else None,
+        }
     return result
 
 
@@ -408,6 +435,13 @@ def synchronize_stats(stats: dict, device: torch.device) -> None:
         totals = torch.tensor([value["se"], value["ae"], value["bias"], value["n"]], device=device)
         dist.all_reduce(totals, op=dist.ReduceOp.SUM)
         value.update(se=totals[0].item(), ae=totals[1].item(), bias=totals[2].item(), n=int(totals[3].item()))
+    if "persistence_history" in stats:
+        history = stats["persistence_history"]
+        totals = torch.tensor(
+            [history["valid_pairs"], history["pairs_without_history"]], device=device,
+        )
+        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+        history.update(valid_pairs=int(totals[0].item()), pairs_without_history=int(totals[1].item()))
 
 
 def loader_options(args: argparse.Namespace) -> dict:
@@ -444,7 +478,8 @@ def station_locations(dataset: RadarStationMemmapDataset, args: argparse.Namespa
 
 
 def evaluate(model, loader, criterion, device, collect_metrics: bool = False,
-             station_locations: list[tuple[int, int, int]] | None = None):
+             station_locations: list[tuple[int, int, int]] | None = None,
+             residual_persistence: bool = False):
     model.eval()
     total_loss = 0.0
     stats = None
@@ -457,8 +492,10 @@ def evaluate(model, loader, criterion, device, collect_metrics: bool = False,
             total_loss += criterion(output, target, mask).item()
             if collect_metrics:
                 if stats is None:
-                    stats = empty_stats(target.shape[2], station_locations)
+                    stats = empty_stats(target.shape[2], station_locations, residual_persistence)
                 update_stats(stats, output, target, mask, station_locations)
+                if residual_persistence:
+                    update_persistence_history_stats(stats, inputs, mask)
     if not len(loader):
         raise ValueError("DataLoader vazio.")
     loss_parts = torch.tensor([total_loss, len(loader)], device=device)
@@ -490,9 +527,10 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     test_loader = DataLoader(test_dataset, shuffle=False, sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
 
     sample_x, sample_y, _ = train_dataset[0]
-    model = model_type(
-        (1, *sample_x.shape), args.num_layers, args.hidden_dim, args.kernel_size,
-        device, 0.0, args.step, output_channels=sample_y.shape[0],
+    model = build_forecaster(
+        model_type, sample_x, sample_y, num_layers=args.num_layers, hidden_dim=args.hidden_dim,
+        kernel_size=args.kernel_size, device=device, step=args.step,
+        forecast_formulation=args.forecast_formulation, input_stations=args.input_stations,
     ).to(device)
     if args.distributed:
         model = DistributedDataParallel(model, device_ids=[device.index])
@@ -503,7 +541,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         f"accumulation={args.gradient_accumulation_steps} | "
         f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}\n"
         f"Input channels | radar=3 | goes={sample_x.shape[0] - 3 - (2 if args.input_stations else 0)} | stations={2 if args.input_stations else 0} | "
-        f"total={sample_x.shape[0]}\n"
+        f"total={sample_x.shape[0]} | formulation={args.forecast_formulation} | "
+        f"STConvS2S channels={sample_x.shape[0] - (2 if args.forecast_formulation == 'residual-persistence' else 0)}\n"
         f"DataLoader | workers={args.workers} | pin_memory={args.pin_memory} | "
         f"persistent_workers={args.persistent_workers} | "
         f"prefetch_factor={args.prefetch_factor if args.workers else 'n/a'}",
@@ -646,7 +685,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     (model.module if args.distributed else model).load_state_dict(state["model_state_dict"])
     locations = station_locations(test_dataset, args)
     _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
-                          station_locations=locations)
+                          station_locations=locations,
+                          residual_persistence=args.forecast_formulation == "residual-persistence")
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
@@ -675,6 +715,8 @@ def main() -> None:
         raise ValueError("Parâmetros de treino e dimensões do mapeamento devem ser positivos; workers, log-interval e crop-margin-pixels não podem ser negativos.")
     if args.persistent_workers and not args.workers:
         raise ValueError("--persistent-workers requer --workers maior que zero.")
+    if args.forecast_formulation == "residual-persistence" and not args.input_stations:
+        raise ValueError("--forecast-formulation residual-persistence requer --input-stations.")
 
     rank, world_size, device = distributed_context(args.distributed)
     if args.pin_memory is None:
