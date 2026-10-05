@@ -15,6 +15,19 @@ from nowcasting.residual_persistence import build_forecaster
 from nowcasting.station_dataset import load_station_pixels
 
 
+def normalize_configuration(configuration: dict) -> dict:
+    """Fill defaults introduced after legacy experiments were trained."""
+    normalized = dict(configuration)
+    normalized.setdefault("input_goes", False)
+    required = ("dataset_root", "test_years", "step", "stride", "model", "num_layers", "hidden_dim",
+                "kernel_size", "stconvs2s_root", "target_source", "station_mapping", "mapping_height_orig",
+                "mapping_width_orig", "crop_stations", "crop_margin_pixels", "input_stations")
+    missing = [name for name in required if name not in normalized]
+    if missing:
+        raise ValueError(f"configuration.json não contém: {', '.join(missing)}")
+    return normalized
+
+
 def station_pixels(dataset: RadarStationMemmapDataset, configuration: dict) -> tuple[np.ndarray, list[int]]:
     year = dataset.years[0]
     frames = dataset.year_data[year]["frames"]
@@ -44,13 +57,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.batch_size <= 0:
         raise ValueError("--batch-size deve ser positivo.")
-    configuration = json.loads((args.experiment_dir / "configuration.json").read_text(encoding="utf-8"))
-    required = ("dataset_root", "test_years", "step", "stride", "model", "num_layers", "hidden_dim",
-                "kernel_size", "stconvs2s_root", "target_source", "station_mapping", "mapping_height_orig",
-                "mapping_width_orig", "crop_stations", "crop_margin_pixels", "input_stations", "input_goes")
-    missing = [name for name in required if name not in configuration]
-    if missing:
-        raise ValueError(f"configuration.json não contém: {', '.join(missing)}")
+    configuration = normalize_configuration(
+        json.loads((args.experiment_dir / "configuration.json").read_text(encoding="utf-8"))
+    )
     device = torch.device(f"cuda:{args.cuda}" if torch.cuda.is_available() else "cpu")
     dataset = RadarStationMemmapDataset(
         configuration["dataset_root"], configuration["test_years"], t_in=int(configuration["step"]),

@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from nowcasting.forecast_evaluation import (
     align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold, skill_scores,
 )
+from nowcasting.cli.export_radar_checkpoint_records import normalize_configuration
 
 
 def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
@@ -27,6 +28,16 @@ def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
 
 
 class ForecastEvaluationTests(unittest.TestCase):
+    def test_checkpoint_export_defaults_absent_legacy_goes_flag_to_false(self):
+        configuration = {
+            "dataset_root": "dataset", "test_years": [2024], "step": 5, "stride": 5,
+            "model": "stconvs2s-c", "num_layers": 1, "hidden_dim": 8, "kernel_size": 5,
+            "stconvs2s_root": "stconvs2s", "target_source": "alertario", "station_mapping": "mapping.csv",
+            "mapping_height_orig": 654, "mapping_width_orig": 656, "crop_stations": True,
+            "crop_margin_pixels": 20, "input_stations": False,
+        }
+        self.assertFalse(normalize_configuration(configuration)["input_goes"])
+
     def test_categorical_metrics_match_known_contingency_table(self):
         metrics = evaluate_records(records(), [1.25])
         categorical = metrics["thresholds"]["1.25"]["global"]
