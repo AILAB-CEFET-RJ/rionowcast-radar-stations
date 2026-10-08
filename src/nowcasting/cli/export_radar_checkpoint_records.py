@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from nowcasting.cli.train import model_class
-from nowcasting.dataset import RadarStationMemmapDataset
+from nowcasting.dataset import RadarStationMemmapDataset, parse_years
 from nowcasting.forecast_records import export_flat_station_forecasts
 from nowcasting.residual_persistence import build_forecaster
 from nowcasting.station_dataset import load_station_pixels
@@ -26,6 +26,13 @@ def normalize_configuration(configuration: dict) -> dict:
     if missing:
         raise ValueError(f"configuration.json não contém: {', '.join(missing)}")
     return normalized
+
+
+def export_years(configuration: dict, requested_years: str | None) -> list[int]:
+    """Resolve an explicit evaluation period without changing the trained model."""
+    if requested_years is not None:
+        return parse_years(requested_years)
+    return sorted(int(year) for year in configuration["test_years"])
 
 
 def station_pixels(dataset: RadarStationMemmapDataset, configuration: dict) -> tuple[np.ndarray, list[int]]:
@@ -54,15 +61,21 @@ def main() -> None:
     parser.add_argument("--experiment-id")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--cuda", default="0")
+    parser.add_argument(
+        "--years",
+        help="Anos a exportar; por padrão usa test_years de configuration.json. "
+             "Use, por exemplo, 2022 para gerar registros de validação sem retreinamento.",
+    )
     args = parser.parse_args()
     if args.batch_size <= 0:
         raise ValueError("--batch-size deve ser positivo.")
     configuration = normalize_configuration(
         json.loads((args.experiment_dir / "configuration.json").read_text(encoding="utf-8"))
     )
+    years = export_years(configuration, args.years)
     device = torch.device(f"cuda:{args.cuda}" if torch.cuda.is_available() else "cpu")
     dataset = RadarStationMemmapDataset(
-        configuration["dataset_root"], configuration["test_years"], t_in=int(configuration["step"]),
+        configuration["dataset_root"], years, t_in=int(configuration["step"]),
         t_out=int(configuration["step"]), stride=int(configuration["stride"] or configuration["step"]),
         target_source=configuration["target_source"], split_name="export", crop_stations=configuration["crop_stations"],
         crop_margin_pixels=int(configuration["crop_margin_pixels"]), input_stations=configuration["input_stations"],
@@ -70,6 +83,7 @@ def main() -> None:
         mapping_height_orig=int(configuration["mapping_height_orig"]), mapping_width_orig=int(configuration["mapping_width_orig"]),
     )
     pixels, ids = station_pixels(dataset, configuration)
+    print(f"Exportando anos: {years}", flush=True)
     sample_x, sample_y, _ = dataset[0]
     constructor = model_class(Path(configuration["stconvs2s_root"]), configuration["model"])
     model = build_forecaster(

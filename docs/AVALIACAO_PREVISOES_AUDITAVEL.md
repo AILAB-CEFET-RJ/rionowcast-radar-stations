@@ -61,6 +61,23 @@ nowcasting-export-radar-checkpoint-records \
 O exportador reconstrói o dataset, crop, entradas de estações e entradas GOES
 a partir de `configuration.json`; não retreina o modelo.
 
+Por padrão, o exportador usa `test_years` registrados no experimento. Para
+exportar o mesmo checkpoint em um período independente, como o ano de
+validação usado para calibrar alertas, informe `--years` explicitamente:
+
+```bash
+nowcasting-export-radar-checkpoint-records \
+  --experiment-dir outputs/experiments/C3-exemplo \
+  --checkpoint outputs/experiments/C3-exemplo/iteration_1_best.pt \
+  --years 2022 \
+  --experiment-id C3 \
+  --output "$records/val_C3.parquet" \
+  --batch-size 8 --cuda 0
+```
+
+O parâmetro apenas muda o período de inferência; pesos, arquitetura e demais
+opções do checkpoint permanecem os do experimento original.
+
 ## Métricas contínuas, categóricas e incerteza
 
 ```bash
