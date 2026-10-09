@@ -150,6 +150,22 @@ nowcasting-calibrate-alert-thresholds \
 Essa calibração afeta somente a decisão categórica de alerta. MAE, RMSE e viés
 devem continuar sendo apresentados sem ajuste posterior.
 
+Para avaliar os eventos com a mesma regra selecionada na validação, passe o
+artefato de calibração ao avaliador de eventos. A saída preserva, para cada
+experimento, escopo e limiar observado, os blocos `raw` e `calibrated`:
+
+```bash
+nowcasting-evaluate-forecast-events \
+  --forecast B1="$records/B1.parquet" \
+  --forecast C3="$records/C3.parquet" \
+  --thresholds 1.25,6.25,12.5 \
+  --calibration outputs/analysis/evaluation/audited_v1/alert_calibration.json \
+  --output outputs/analysis/evaluation/audited_v1/events_calibrated.json
+```
+
+O limiar observado continua definindo o evento de chuva. O limiar calibrado é
+usado exclusivamente para decidir se a previsão emite um alerta.
+
 ## Múltiplas seeds
 
 Para redes neurais, execute pelo menos três seeds independentes. O planejador

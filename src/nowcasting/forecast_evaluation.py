@@ -115,7 +115,8 @@ def _municipal_records(records: pd.DataFrame) -> pd.DataFrame:
 
 
 def event_metrics(
-    records: pd.DataFrame, threshold: float, *, gap_minutes: int = 15, scope: str = "station",
+    records: pd.DataFrame, threshold: float, *, decision_threshold: float | None = None,
+    gap_minutes: int = 15, scope: str = "station",
 ) -> dict:
     """Evaluate contiguous exceedance events by station or municipal maximum.
 
@@ -125,6 +126,10 @@ def event_metrics(
     """
     if scope not in {"station", "municipal"}:
         raise ValueError("scope deve ser 'station' ou 'municipal'.")
+    if decision_threshold is None:
+        decision_threshold = threshold
+    if decision_threshold < 0:
+        raise ValueError("decision_threshold não pode ser negativo.")
     valid = records.loc[records["is_observed"]].copy()
     valid["target_timestamp"] = pd.to_datetime(valid["target_timestamp"], utc=True, errors="raise")
     if scope == "municipal":
@@ -139,7 +144,7 @@ def event_metrics(
     for _, group in valid.groupby("event_group", sort=False):
         group = group.sort_values("target_timestamp").reset_index(drop=True)
         observed_event = group["observed_mm_15min"].to_numpy() >= threshold
-        forecast_event = group["predicted_mm_15min"].to_numpy() >= threshold
+        forecast_event = group["predicted_mm_15min"].to_numpy() >= decision_threshold
         timestamps = group["target_timestamp"].to_numpy()
         event_indices = _event_segments(observed_event, timestamps, gap_minutes)
         event_mask = np.zeros(len(group), dtype=bool)
@@ -155,7 +160,8 @@ def event_metrics(
         false_alert_events += len(_event_segments(false_mask, timestamps, gap_minutes))
         false_times = group.loc[false_mask, "target_timestamp"].dt.tz_convert("America/Sao_Paulo")
         false_alert_days.update(false_times.dt.date.astype(str))
-    return {"scope": scope, "threshold_mm_15min": threshold, "event_gap_minutes": gap_minutes,
+    return {"scope": scope, "threshold_mm_15min": threshold,
+            "decision_threshold_mm_15min": decision_threshold, "event_gap_minutes": gap_minutes,
             "events": event_count, "detected_events": detected,
             "event_detection_fraction": detected / event_count if event_count else None,
             "median_detected_lead_minutes": float(np.median(lead_minutes)) if lead_minutes else None,

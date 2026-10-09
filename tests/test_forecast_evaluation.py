@@ -14,6 +14,7 @@ from nowcasting.forecast_evaluation import (
     align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold, skill_scores,
 )
 from nowcasting.cli.export_radar_checkpoint_records import export_years, normalize_configuration, stconvs2s_root
+from nowcasting.cli.evaluate_forecast_events import calibrated_threshold
 
 
 def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
@@ -78,6 +79,16 @@ class ForecastEvaluationTests(unittest.TestCase):
         self.assertEqual(report["false_alert_records"], 1)
         self.assertEqual(report["false_alert_events"], 1)
         self.assertEqual(report["false_alert_days"], 1)
+
+    def test_event_metrics_separates_observed_and_decision_thresholds(self):
+        report = event_metrics(records(), 1.25, decision_threshold=0.0)
+        self.assertEqual(report["threshold_mm_15min"], 1.25)
+        self.assertEqual(report["decision_threshold_mm_15min"], 0.0)
+        self.assertEqual(report["detected_events"], 2)
+
+    def test_calibrated_threshold_reads_the_validation_selected_value(self):
+        calibration = {"experiments": {"C3": {"1.25": {"selected_decision_threshold": 0.2}}}}
+        self.assertEqual(calibrated_threshold(calibration, "C3", 1.25), 0.2)
 
     def test_municipal_event_metrics_aggregate_station_maximum(self):
         second_station = records((0.0, 0.0, 0.0, 0.0))
