@@ -35,6 +35,11 @@ def export_years(configuration: dict, requested_years: str | None) -> list[int]:
     return sorted(int(year) for year in configuration["test_years"])
 
 
+def stconvs2s_root(configuration: dict, override: Path | None) -> Path:
+    """Use an explicit local core checkout without altering experiment metadata."""
+    return override if override is not None else Path(configuration["stconvs2s_root"])
+
+
 def station_pixels(dataset: RadarStationMemmapDataset, configuration: dict) -> tuple[np.ndarray, list[int]]:
     year = dataset.years[0]
     frames = dataset.year_data[year]["frames"]
@@ -62,6 +67,11 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--cuda", default="0")
     parser.add_argument(
+        "--stconvs2s-root", type=Path,
+        help="Checkout local do STConvS2S; substitui somente o caminho registrado no experimento. "
+             "Útil ao exportar um checkpoint em outra máquina.",
+    )
+    parser.add_argument(
         "--years",
         help="Anos a exportar; por padrão usa test_years de configuration.json. "
              "Use, por exemplo, 2022 para gerar registros de validação sem retreinamento.",
@@ -85,7 +95,7 @@ def main() -> None:
     pixels, ids = station_pixels(dataset, configuration)
     print(f"Exportando anos: {years}", flush=True)
     sample_x, sample_y, _ = dataset[0]
-    constructor = model_class(Path(configuration["stconvs2s_root"]), configuration["model"])
+    constructor = model_class(stconvs2s_root(configuration, args.stconvs2s_root), configuration["model"])
     model = build_forecaster(
         constructor, sample_x, sample_y, num_layers=int(configuration["num_layers"]),
         hidden_dim=int(configuration["hidden_dim"]), kernel_size=int(configuration["kernel_size"]),

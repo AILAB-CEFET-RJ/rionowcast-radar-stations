@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from nowcasting.forecast_evaluation import (
     align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold, skill_scores,
 )
-from nowcasting.cli.export_radar_checkpoint_records import export_years, normalize_configuration
+from nowcasting.cli.export_radar_checkpoint_records import export_years, normalize_configuration, stconvs2s_root
 
 
 def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
@@ -42,6 +42,11 @@ class ForecastEvaluationTests(unittest.TestCase):
         configuration = {"test_years": [2023, 2024]}
         self.assertEqual(export_years(configuration, None), [2023, 2024])
         self.assertEqual(export_years(configuration, "2022"), [2022])
+
+    def test_checkpoint_export_can_override_legacy_core_checkout_path(self):
+        configuration = {"stconvs2s_root": "/lovelace/external/stconvs2s"}
+        self.assertEqual(stconvs2s_root(configuration, None), Path("/lovelace/external/stconvs2s"))
+        self.assertEqual(stconvs2s_root(configuration, Path("/workstation/stconvs2s")), Path("/workstation/stconvs2s"))
 
     def test_categorical_metrics_match_known_contingency_table(self):
         metrics = evaluate_records(records(), [1.25])
