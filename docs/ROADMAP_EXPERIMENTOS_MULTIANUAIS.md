@@ -179,6 +179,25 @@ são filtrados e reindexados em memória, mantendo o dataset original intacto.
   sem modificar o repositório externo da arquitetura.
 - [ ] Executar C3R com três seeds e comparar com B1, C1 e C3 no mesmo teste,
   priorizando T+45--T+75 e métricas de eventos intensos.
+- [ ] Registrar a contagem de eventos e de pares válidos por limiar em treino,
+  validação e teste, antes de interpretar métricas de chuva forte ou extrema.
+- [ ] Executar, no dataset auditável V3, uma ablação de desbalanceamento que
+  separe os efeitos de loss e amostragem: `masked-huber` sem reamostragem,
+  `weighted-huber` sem reamostragem, e um sampler estratificado moderado que
+  reduza a frequência de sequências secas sem equalizar integralmente as quatro
+  classes. Escolher pesos e probabilidades somente em 2022.
+- [ ] Implementar e avaliar uma loss híbrida mascarada, combinando os termos
+  Huber não ponderado e ponderado por intensidade. Comparar com o C2, cuja
+  ponderação agressiva combinada ao sampler balanceado degradou fortemente os
+  falsos alertas.
+- [ ] Permitir selecionar checkpoint e early stopping por uma métrica de
+  validação de alerta previamente declarada (por exemplo, CSI em 6,25 mm/15
+  min, ou combinação fixa de limiares), mantendo `val_loss` no histórico e sem
+  consultar 2023--2024 durante a seleção.
+- [ ] Executar uma busca pequena e cronologicamente isolada de otimização em
+  2022: batch `2/4/8`, taxa de aprendizado `3e-4/1e-3` e, se justificado pela
+  validação, scheduler de redução em platô. Fixar a configuração antes da
+  avaliação final em 2023--2024.
 - [ ] Projetar a inferência operacional de C3R: obter leituras recentes das
   estações, aplicar a mesma convenção temporal e construir a persistência
   causal sem usar observações futuras.
@@ -228,6 +247,17 @@ média, máximo e fração não nula ao redor de cada estação. Uma Ridge por
 horizonte, ajustada exclusivamente no treino, converte essas features em
 `log1p(mm/15min)`. Ele é uma referência de advecção visual e leitura
 calibrada, não uma conversão de RGB para refletividade física.
+
+### Limitações das losses e métricas espaciais
+
+O target de supervisão vigente possui observações apenas nos pixels das 33
+estações. Por isso, FSS, RHD, GDL, FACL e losses adversariais, que pressupõem
+um campo de precipitação denso e espacialmente confiável, não devem ser
+interpretados nem otimizados sobre a grade reconstruída por pixels ausentes.
+Essas técnicas ficam condicionadas à obtenção e auditoria de um target denso
+quantitativo (por exemplo, refletividade ou taxa de chuva calibrada). Até lá,
+o protocolo usa métricas por estação, proxy municipal, limiares de alerta e
+eventos, sempre com máscaras de observação.
 
 ### Matriz Experimental
 
