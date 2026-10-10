@@ -36,6 +36,8 @@ fixadas. Os dois avaliadores também gravam as versões efetivas no
 ```bash
 dataset=data/datasets/radar_sumare_2012_2024_15min_128_audited_v3
 run=B2a-optical-flow-audited-v3-$(date +%Y%m%d)
+records=outputs/evaluation_records/B2a-audited-v3
+mkdir -p "$records/validation" "$records/test"
 
 CUDA_VISIBLE_DEVICES="" nowcasting-evaluate-optical-flow \
   --dataset-root "$dataset" \
@@ -49,6 +51,8 @@ CUDA_VISIBLE_DEVICES="" nowcasting-evaluate-optical-flow \
   --stride 5 \
   --neighborhood-radius 2 \
   --ridge-alphas 0.1,1,10 \
+  --validation-forecast-records "$records/validation/B2a.parquet" \
+  --forecast-records "$records/test/B2a.parquet" \
   --run-name "$run"
 ```
 
@@ -74,6 +78,8 @@ zero significa persistência pura; peso um significa B2a pura.
 ```bash
 dataset=data/datasets/radar_sumare_2012_2024_15min_128_audited_v3
 run=B2b-optical-flow-persistence-audited-v3-$(date +%Y%m%d)
+records=outputs/evaluation_records/B2b-audited-v3
+mkdir -p "$records/validation" "$records/test"
 
 CUDA_VISIBLE_DEVICES="" nowcasting-evaluate-optical-flow-blend \
   --dataset-root "$dataset" \
@@ -88,6 +94,8 @@ CUDA_VISIBLE_DEVICES="" nowcasting-evaluate-optical-flow-blend \
   --neighborhood-radius 2 \
   --ridge-alphas 0.1,1,10 \
   --blend-weights 0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1 \
+  --validation-forecast-records "$records/validation/B2b.parquet" \
+  --forecast-records "$records/test/B2b.parquet" \
   --run-name "$run"
 ```
 

@@ -39,6 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None, help="Limita amostras por split; somente para smoke tests.")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs" / "experiments")
     parser.add_argument("--run-name", default=None)
+    parser.add_argument("--validation-forecast-records", type=Path,
+                        help="Parquet opcional de validação para calibração de alertas.")
     parser.add_argument("--forecast-records", type=Path,
                         help="Parquet opcional para avaliação pareada por estação e horizonte.")
     return parser.parse_args()
@@ -120,6 +122,8 @@ def main() -> None:
             candidates.append((alpha, weight, fitted, validation))
             print(f"alpha={alpha:g} | peso_fluxo={weight:.2f} | val_mae={validation['global']['mae']:.6f}", flush=True)
     alpha, weight, fitted, validation = min(candidates, key=lambda item: item[3]["global"]["mae"])
+    val_optical = predict(fitted, val_x, args.step, len(station_ids))
+    val_prediction = blend(val_optical, val_persistence, weight)
     test_optical = predict(fitted, test_x, args.step, len(station_ids))
     test_prediction = blend(test_optical, test_persistence, weight)
     test_metrics = metrics(test_prediction, test_y, test_m, args.step, len(station_ids))
@@ -134,6 +138,12 @@ def main() -> None:
                           "blend": "weight * optical-flow precipitation + (1 - weight) * B1 persistence precipitation"})
     (run_dir / "configuration.json").write_text(json.dumps(configuration, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     joblib.dump(fitted, run_dir / "ridge_readouts.joblib")
+    validation_records = None
+    if args.validation_forecast_records:
+        validation_records = export_flat_station_forecasts(
+            datasets[1], pixels, station_ids, val_prediction, args.validation_forecast_records,
+            experiment_id=args.run_name or run_dir.name,
+        )
     records = None
     if args.forecast_records:
         records = export_flat_station_forecasts(datasets[2], pixels, station_ids, test_prediction,
@@ -144,6 +154,8 @@ def main() -> None:
                "validation_metrics": validation, "test_metrics": test_metrics,
                "flow_fallbacks": {"train": train_fallbacks, "val": val_fallbacks, "test": test_fallbacks},
                "stations_without_input_history": {"train": train_missing, "val": val_missing, "test": test_missing}}
+    if validation_records:
+        summary["validation_forecast_records"] = validation_records | {"path": str(args.validation_forecast_records)}
     if records:
         summary["forecast_records"] = records | {"path": str(args.forecast_records)}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
