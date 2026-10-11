@@ -23,6 +23,11 @@ eles. A auditoria estrita em `outputs/analysis/goes16/c13_2018_2024_v2`
 confirmou cobertura de 99,46% e zero violações da regra de causalidade por
 fim de cena.
 
+A máquina de treinamento deve conter o diretório `goes16` de **todos** os
+anos do recorte, de 2018 a 2024. C13 é consultado no treino, na validação e
+no teste; copiar apenas os anos de treino faz a construção do split de
+validação falhar antes de iniciar as épocas.
+
 Para cada sequência são exigidos cinco frames C13 causais na entrada. Isso
 produz os seguintes tamanhos, iguais nos dois braços:
 
