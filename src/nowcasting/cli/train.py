@@ -56,7 +56,7 @@ RESUME_CONFIG_KEYS = (
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
-    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "forecast_formulation", "crop",
+    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "require_goes_availability", "forecast_formulation", "crop",
     "radar_capture_preprocessing", "goes_preprocessing",
 )
 
@@ -127,6 +127,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--input-goes", action="store_true",
         help="Acrescenta canais GOES-16 causalmente alinhados ao radar; requer year=*/goes16.",
+    )
+    parser.add_argument(
+        "--require-goes-availability", action="store_true",
+        help="Filtra sequências por disponibilidade causal de GOES sem acrescentar GOES à entrada; use no controle pareado.",
     )
     parser.add_argument(
         "--forecast-formulation", choices=("direct", "residual-persistence"), default="direct",
@@ -757,6 +761,7 @@ def main() -> None:
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
                                   input_goes=args.input_goes,
+                                  require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
@@ -766,6 +771,7 @@ def main() -> None:
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
                                   input_goes=args.input_goes,
+                                  require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),
@@ -775,6 +781,7 @@ def main() -> None:
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
                                   input_goes=args.input_goes,
+                                  require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
                                   mapping_width_orig=args.mapping_width_orig),

@@ -39,7 +39,9 @@ class ForecastEvaluationTests(unittest.TestCase):
             "mapping_height_orig": 654, "mapping_width_orig": 656, "crop_stations": True,
             "crop_margin_pixels": 20, "input_stations": False,
         }
-        self.assertFalse(normalize_configuration(configuration)["input_goes"])
+        normalized = normalize_configuration(configuration)
+        self.assertFalse(normalized["input_goes"])
+        self.assertFalse(normalized["require_goes_availability"])
 
     def test_checkpoint_export_can_override_test_years_for_validation_records(self):
         configuration = {"test_years": [2023, 2024]}

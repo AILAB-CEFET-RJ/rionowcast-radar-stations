@@ -182,6 +182,19 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertAlmostEqual(x[3, 0, 0, 0].item(), 0.5)
             self.assertAlmostEqual(x[4, 1, 1, 1].item(), 0.5)
 
+    def test_goes_availability_control_filters_the_same_sequences_without_goes_channels(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            create_goes_year(root, 2020, [True, True, False, True, True, True, True, True, True, True, True, True])
+            control = RadarStationMemmapDataset(
+                root, [2020], t_in=2, t_out=2, stride=1, require_goes_availability=True,
+            )
+            with_goes = RadarStationMemmapDataset(root, [2020], t_in=2, t_out=2, stride=1, input_goes=True)
+            self.assertEqual(control.samples, with_goes.samples)
+            x, _, _ = control[0]
+            self.assertEqual(tuple(x.shape), (3, 2, 2, 2))
+
     def test_station_sequence_dataset_and_model_use_values_and_masks(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
