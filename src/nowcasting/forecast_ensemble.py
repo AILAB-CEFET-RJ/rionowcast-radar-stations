@@ -6,7 +6,7 @@ from collections.abc import Iterable
 import numpy as np
 import pandas as pd
 
-from nowcasting.forecast_evaluation import align_records, validate_records
+from nowcasting.forecast_evaluation import align_records, categorical_records, select_decision_threshold, validate_records
 
 
 def _continuous_score(prediction: np.ndarray, observed: np.ndarray, metric: str) -> float:
@@ -72,3 +72,58 @@ def blend_horizons(
     result = result.drop(columns="experiment_id", errors="ignore")
     result.insert(0, "experiment_id", experiment_id)
     return validate_records(result, experiment_id).assign(experiment_id=experiment_id)
+
+
+def select_global_alert_weight(
+    baseline: pd.DataFrame,
+    candidate: pd.DataFrame,
+    weights: Iterable[float],
+    *,
+    observed_thresholds: Iterable[float],
+    decision_thresholds: Iterable[float],
+    minimum_pod: float | None = None,
+) -> tuple[float, list[dict]]:
+    """Select one global candidate weight by validation-only municipal CSI.
+
+    Each trial calibrates its decision threshold for each observed intensity on
+    the validation records themselves. This creates an explicitly operational
+    selection criterion while keeping every selection out of the test period.
+    """
+    aligned = align_records({"baseline": baseline, "candidate": candidate})
+    baseline, candidate = aligned["baseline"], aligned["candidate"]
+    candidate_weights = sorted(set(float(weight) for weight in weights))
+    if not candidate_weights or any(weight < 0 or weight > 1 for weight in candidate_weights):
+        raise ValueError("Os pesos devem estar no intervalo fechado [0, 1].")
+    if minimum_pod is not None and not 0 <= minimum_pod <= 1:
+        raise ValueError("minimum_pod deve estar no intervalo fechado [0, 1].")
+    thresholds = [float(value) for value in observed_thresholds]
+    reports: list[dict] = []
+    horizons = {int(value) for value in baseline["horizon"].unique()}
+    for weight in candidate_weights:
+        blended = blend_horizons(baseline, candidate, {horizon: weight for horizon in horizons}, experiment_id="selection")
+        threshold_reports = {}
+        for threshold in thresholds:
+            decision, metric = select_decision_threshold(
+                blended, threshold, decision_thresholds, scope="municipal")
+            if metric["csi"] is None or metric["pod"] is None or metric["far"] is None:
+                raise ValueError(f"Limiar {threshold:g}: eventos insuficientes para seleção municipal.")
+            threshold_reports[f"{threshold:g}"] = {
+                "selected_decision_threshold": decision,
+                "csi": metric["csi"], "pod": metric["pod"], "far": metric["far"],
+            }
+        values = list(threshold_reports.values())
+        reports.append({
+            "candidate_weight": weight,
+            "mean_municipal_csi": float(np.mean([item["csi"] for item in values])),
+            "minimum_municipal_pod": float(min(item["pod"] for item in values)),
+            "mean_municipal_far": float(np.mean([item["far"] for item in values])),
+            "feasible": minimum_pod is None or all(item["pod"] >= minimum_pod for item in values),
+            "thresholds": threshold_reports,
+        })
+    feasible = [item for item in reports if item["feasible"]]
+    if not feasible:
+        raise ValueError("Nenhum peso satisfaz --minimum-pod na validação municipal.")
+    selected = max(feasible, key=lambda item: (
+        item["mean_municipal_csi"], -item["mean_municipal_far"], -item["candidate_weight"],
+    ))
+    return float(selected["candidate_weight"]), reports

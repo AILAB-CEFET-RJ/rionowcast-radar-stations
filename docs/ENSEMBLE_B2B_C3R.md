@@ -48,3 +48,40 @@ Depois, calibre limiares somente em 2022 e avalie os eventos em 2023--2024,
 como nos demais modelos. A seleção de pesos e a seleção de limiares são etapas
 distintas: a primeira minimiza erro contínuo; a segunda transforma a previsão
 fixada em alerta.
+
+## Variante orientada a alerta municipal (B3A)
+
+Para uma comparação operacional distinta do B3, o objetivo
+`municipal-csi` seleciona em 2022 um **único** peso global de C3R. Para
+cada peso candidato, calibra um limiar de decisão por intensidade e mede o CSI
+depois de agregar a previsão máxima entre as estações para cada
+timestamp--horizonte. O peso que maximiza a média de CSI nos três limiares é
+selecionado; `--minimum-pod` pode impor uma sensibilidade mínima em cada
+limiar. Esse modo não altera o B3 por MAE e deve ser tratado como uma ablação
+orientada a alerta.
+
+```bash
+alert_records=outputs/evaluation_records/B3A-municipal-csi
+alert_report=outputs/analysis/evaluation/B3A-municipal-csi
+mkdir -p "$alert_records/validation" "$alert_records/test" "$alert_report"
+
+for seed in 1000 1001 1002; do
+  run="B3A-B2b-C3R-seed-$seed"
+  PYTHONPATH=src python -u -m nowcasting.cli.blend_forecast_records \
+    --validation-baseline "$b2/validation/B2b.parquet" \
+    --validation-candidate "$c3r/validation/C3R-seed-$seed.parquet" \
+    --test-baseline "$b2/test/B2b.parquet" \
+    --test-candidate "$c3r/test/C3R-seed-$seed.parquet" \
+    --selection-objective municipal-csi \
+    --thresholds 1.25,6.25,12.5 \
+    --minimum-pod 0.20 \
+    --experiment-id "$run" \
+    --validation-output "$alert_records/validation/$run.parquet" \
+    --test-output "$alert_records/test/$run.parquet" \
+    --summary "$alert_report/$run.json"
+done
+```
+
+Ao calibrar os limiares para B3A, usar também `--scope municipal` em
+`nowcasting.cli.calibrate_alert_thresholds`; isso mantém a unidade de seleção
+do limiar consistente com o objetivo da variante.

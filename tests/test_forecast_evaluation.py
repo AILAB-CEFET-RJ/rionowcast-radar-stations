@@ -14,8 +14,9 @@ from nowcasting.forecast_evaluation import (
     align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold, skill_scores,
 )
 from nowcasting.cli.export_radar_checkpoint_records import export_years, normalize_configuration, stconvs2s_root
+from nowcasting.cli.calibrate_alert_thresholds import load_forecasts
 from nowcasting.cli.evaluate_forecast_events import calibrated_threshold
-from nowcasting.forecast_ensemble import blend_horizons, select_horizon_weights
+from nowcasting.forecast_ensemble import blend_horizons, select_global_alert_weight, select_horizon_weights
 
 
 def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
@@ -91,6 +92,14 @@ class ForecastEvaluationTests(unittest.TestCase):
         calibration = {"experiments": {"C3": {"1.25": {"selected_decision_threshold": 0.2}}}}
         self.assertEqual(calibrated_threshold(calibration, "C3", 1.25), 0.2)
 
+    def test_alert_calibration_loader_accepts_one_forecast(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.parquet"
+            records().to_parquet(path, index=False)
+            loaded = load_forecasts([("B3A", path)])
+        self.assertEqual(list(loaded), ["B3A"])
+
     def test_municipal_event_metrics_aggregate_station_maximum(self):
         second_station = records((0.0, 0.0, 0.0, 0.0))
         second_station["station_id"] = 2
@@ -120,6 +129,17 @@ class ForecastEvaluationTests(unittest.TestCase):
         blended = blend_horizons(baseline, candidate, weights, experiment_id="B3")
         self.assertEqual(list(blended["experiment_id"].unique()), ["B3"])
         self.assertEqual(list(blended["predicted_mm_15min"]), [0.0, 0.0, 0.0, 0.0])
+
+    def test_alert_ensemble_selects_global_weight_by_municipal_csi(self):
+        baseline = records((0.0, 0.0, 0.0, 0.0))
+        candidate = records((0.0, 2.0, 0.0, 2.0))
+        weight, report = select_global_alert_weight(
+            baseline, candidate, [0.0, 0.5, 1.0], observed_thresholds=[1.25],
+            decision_thresholds=[0.0, 1.25], minimum_pod=0.5,
+        )
+        self.assertEqual(weight, 1.0)
+        self.assertTrue(report[-1]["feasible"])
+        self.assertEqual(report[-1]["thresholds"]["1.25"]["selected_decision_threshold"], 1.25)
 
     def test_station_metrics_and_intensity_bootstrap_are_available(self):
         baseline = records((0.0, 0.0, 0.0, 0.0))

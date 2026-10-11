@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from nowcasting.forecast_ensemble import blend_horizons, select_horizon_weights
+from nowcasting.forecast_ensemble import blend_horizons, select_global_alert_weight, select_horizon_weights
 from nowcasting.forecast_evaluation import evaluate_records
 
 
@@ -20,14 +20,19 @@ def parse_weights(value: str) -> list[float]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Seleciona, na validação, um peso por horizonte para combinar dois forecast records.")
+        description="Seleciona, na validação, pesos para combinar dois forecast records.")
     parser.add_argument("--validation-baseline", type=Path, required=True)
     parser.add_argument("--validation-candidate", type=Path, required=True)
     parser.add_argument("--test-baseline", type=Path, required=True)
     parser.add_argument("--test-candidate", type=Path, required=True)
     parser.add_argument("--candidate-weights", type=parse_weights, default=parse_weights("0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1"))
-    parser.add_argument("--selection-metric", choices=("mae", "rmse"), default="mae")
+    parser.add_argument("--selection-objective", choices=("horizon-mae", "horizon-rmse", "municipal-csi"), default="horizon-mae")
+    parser.add_argument("--selection-metric", choices=("mae", "rmse"), default=None,
+                        help="Alias legado para --selection-objective horizon-mae ou horizon-rmse.")
     parser.add_argument("--thresholds", default="1.25,6.25,12.5")
+    parser.add_argument("--decision-thresholds", default="0,0.25,0.5,0.75,1,1.25,2,3,4,6.25,8,10,12.5,16")
+    parser.add_argument("--minimum-pod", type=float, default=None,
+                        help="Aplicável a municipal-csi; descarte pesos com POD municipal abaixo deste valor.")
     parser.add_argument("--experiment-id", required=True)
     parser.add_argument("--validation-output", type=Path, required=True)
     parser.add_argument("--test-output", type=Path, required=True)
@@ -38,14 +43,30 @@ def main() -> None:
     validation_candidate = pd.read_parquet(args.validation_candidate)
     test_baseline = pd.read_parquet(args.test_baseline)
     test_candidate = pd.read_parquet(args.test_candidate)
-    weights, candidates = select_horizon_weights(
-        validation_baseline, validation_candidate, args.candidate_weights, metric=args.selection_metric)
+    thresholds = [float(value) for value in args.thresholds.split(",")]
+    objective = args.selection_objective
+    if args.selection_metric is not None:
+        if objective != "horizon-mae":
+            raise ValueError("--selection-metric não pode ser combinado com --selection-objective.")
+        objective = f"horizon-{args.selection_metric}"
+    if objective == "municipal-csi":
+        selected_weight, candidates = select_global_alert_weight(
+            validation_baseline, validation_candidate, args.candidate_weights,
+            observed_thresholds=thresholds,
+            decision_thresholds=[float(value) for value in args.decision_thresholds.split(",")],
+            minimum_pod=args.minimum_pod,
+        )
+        horizons = {int(value) for value in validation_baseline["horizon"].unique()}
+        weights = {horizon: selected_weight for horizon in sorted(horizons)}
+    else:
+        metric = objective.removeprefix("horizon-")
+        weights, candidates = select_horizon_weights(
+            validation_baseline, validation_candidate, args.candidate_weights, metric=metric)
     validation = blend_horizons(validation_baseline, validation_candidate, weights, experiment_id=args.experiment_id)
     test = blend_horizons(test_baseline, test_candidate, weights, experiment_id=args.experiment_id)
     for output, records in ((args.validation_output, validation), (args.test_output, test)):
         output.parent.mkdir(parents=True, exist_ok=True)
         records.to_parquet(output, index=False)
-    thresholds = [float(value) for value in args.thresholds.split(",")]
     summary = {
         "selection_split": "validation",
         "report_split": "test",
@@ -56,7 +77,8 @@ def main() -> None:
             "test_baseline": str(args.test_baseline),
             "test_candidate": str(args.test_candidate),
         },
-        "selection_metric": args.selection_metric,
+        "selection_objective": objective,
+        "minimum_pod": args.minimum_pod,
         "candidate_weights": args.candidate_weights,
         "selected_candidate_weight_by_horizon": weights,
         "validation_candidates": candidates,

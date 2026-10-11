@@ -114,6 +114,22 @@ def _municipal_records(records: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def categorical_records(
+    records: pd.DataFrame, observed_threshold: float, decision_threshold: float, *, scope: str = "station",
+) -> dict:
+    """Evaluate point alerts at station level or after municipal maximum aggregation."""
+    if scope not in {"station", "municipal"}:
+        raise ValueError("scope deve ser 'station' ou 'municipal'.")
+    valid = records.loc[records["is_observed"]]
+    if scope == "municipal":
+        valid = _municipal_records(valid)
+    return categorical_with_decision_threshold(
+        valid["predicted_mm_15min"].to_numpy(float),
+        valid["observed_mm_15min"].to_numpy(float),
+        observed_threshold, decision_threshold,
+    )
+
+
 def event_metrics(
     records: pd.DataFrame, threshold: float, *, decision_threshold: float | None = None,
     gap_minutes: int = 15, scope: str = "station",
@@ -171,14 +187,11 @@ def event_metrics(
 
 
 def select_decision_threshold(
-    records: pd.DataFrame, observed_threshold: float, candidates: Iterable[float],
+    records: pd.DataFrame, observed_threshold: float, candidates: Iterable[float], *, scope: str = "station",
 ) -> tuple[float, dict]:
-    valid = records.loc[records["is_observed"]]
-    prediction = valid["predicted_mm_15min"].to_numpy(float)
-    observed = valid["observed_mm_15min"].to_numpy(float)
     scored = []
     for candidate in candidates:
-        current = categorical_with_decision_threshold(prediction, observed, observed_threshold, candidate)
+        current = categorical_records(records, observed_threshold, candidate, scope=scope)
         scored.append((candidate, current))
     usable = [(candidate, current) for candidate, current in scored if current["csi"] is not None]
     if not usable:
