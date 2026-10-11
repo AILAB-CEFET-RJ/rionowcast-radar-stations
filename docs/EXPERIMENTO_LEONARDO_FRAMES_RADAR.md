@@ -74,12 +74,72 @@ conterá:
 
 - `summary.json`: métricas da STConvS2S e da persistência no teste;
 - `best.pt`: checkpoint escolhido exclusivamente pela validação de 2022;
-- `qualitative_test_example.png`: comparação visual, em cinco horizontes,
-  entre último frame de entrada, persistência, STConvS2S e frame observado;
+- `qualitative_test_T+15.png` até `qualitative_test_T+75.png`: uma figura por
+  horizonte, com último frame de entrada, persistência, STConvS2S e frame
+  observado (gold);
 - `configuration.json`: parâmetros e splits usados.
 
 Para uma apresentação curta, reporte a tabela de MAE/RMSE global e de eco
 ativo, a métrica por horizonte da `summary.json` e a figura qualitativa.
+
+Para regenerar as figuras de um experimento já concluído, sem retreinar:
+
+```bash
+PYTHONPATH=src python -u -m nowcasting.cli.render_radar_frame_example \
+  --run-dir outputs/experiments/Leonardo-radar-rgb-stconvs2s-seed-1000 \
+  --dataset-root "$dataset" \
+  --cuda 0
+```
+
+## Casos secos e chuvosos para discussão qualitativa
+
+As estações do AlertaRio podem ser usadas somente para selecionar, de forma
+retrospectiva, casos ilustrativos no teste. Isso não altera a função de perda,
+o checkpoint, as métricas RGB nem simula uma decisão em tempo real. O caso
+seco exige 0,0 mm/15 min em todas as estações e nos cinco horizontes; o caso
+chuvoso exige ao menos 6,25 mm/15 min em alguma estação futura, com todas as
+observações válidas.
+
+Primeiro, gere candidatos de 2023:
+
+```bash
+run=outputs/experiments/Leonardo-radar-rgb-stconvs2s-seed-1000
+showcases="$run/showcases"
+mkdir -p "$showcases"
+
+PYTHONPATH=src python -u -m nowcasting.cli.select_radar_frame_showcases \
+  --dataset-root "$dataset" \
+  --years 2023 \
+  --mapping configs/mapeamento_pixel_estacao_alertario_historical_v1.csv \
+  --t-in 5 --t-out 5 --stride 5 \
+  --wet-threshold-mm15 6.25 \
+  --candidates-per-class 5 \
+  --output "$showcases/candidates_2023.json"
+```
+
+Inspecione `candidates_2023.json` e escolha um `example_index` seco e outro
+chuvoso. Em seguida, gere as cinco figuras de cada caso. O título explicita a
+classificação retrospectiva pelas estações:
+
+```bash
+PYTHONPATH=src python -u -m nowcasting.cli.render_radar_frame_example \
+  --run-dir "$run" \
+  --dataset-root "$dataset" \
+  --example-index INDICE_SECO \
+  --output-dir "$showcases/dry" \
+  --output-prefix dry \
+  --title "Caso seco retrospectivo: AlertaRio = 0,0 mm/15 min" \
+  --cuda 0
+
+PYTHONPATH=src python -u -m nowcasting.cli.render_radar_frame_example \
+  --run-dir "$run" \
+  --dataset-root "$dataset" \
+  --example-index INDICE_CHUVOSO \
+  --output-dir "$showcases/wet" \
+  --output-prefix wet \
+  --title "Caso chuvoso retrospectivo: maximo AlertaRio >= 6,25 mm/15 min" \
+  --cuda 0
+```
 
 ## Resultado da execução inicial
 
@@ -127,11 +187,13 @@ sequência curta de slides pode seguir este roteiro:
    apenas repete o último frame; a rede aprende padrões de evolução no treino.
 4. **Resultados:** usar a tabela acima e enfatizar que a rede melhora o erro
    RGB global depois de T+15, mas não melhora a reconstrução de eco ativo.
-5. **Figura qualitativa:** usar `qualitative_test_example.png` para comparar
-   previsão e observado nos cinco horizontes. A figura gerada nesta execução
-   contém padrões radiais verdes no target em T+45 e T+60; apresente-os como
-   exemplo de artefato do produto visual e de uma dificuldade que a rede não
-   resolveu, não como uma tempestade prevista pela rede.
+5. **Figuras qualitativas:** usar uma figura por horizonte, de
+   `qualitative_test_T+15.png` a `qualitative_test_T+75.png`. Cada uma coloca
+   previsão e gold lado a lado, preservando também o último frame de entrada
+   e a persistência como referência. A seleção atual contém padrões radiais
+   verdes no gold de T+45 e T+60; apresente-os como exemplo de artefato do
+   produto visual e de uma dificuldade que a rede não resolveu, não como uma
+   tempestade prevista pela rede.
 6. **Conclusão e continuidade:** o pipeline, o split temporal e a comparação
    com baseline funcionam. Os próximos passos são selecionar casos
    qualitativos meteorologicamente interpretáveis, filtrar artefatos e, se

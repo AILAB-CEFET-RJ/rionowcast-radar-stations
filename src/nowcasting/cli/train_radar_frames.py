@@ -137,29 +137,51 @@ def evaluate(model: torch.nn.Module | None, loader: DataLoader, device: torch.de
     return finalize(network_stats), finalize(persistence_stats)
 
 
-def render_example(model: torch.nn.Module, dataset: RadarFrameSequenceDataset, device: torch.device, output_path: Path) -> int:
-    """Write a compact qualitative comparison using the test sample with most future echo."""
-    candidate_count = min(len(dataset), 200)
-    index = max(range(candidate_count), key=lambda item: float(dataset[item][1].max()))
-    inputs, target = dataset[index]
+def render_example(
+    model: torch.nn.Module,
+    dataset: RadarFrameSequenceDataset,
+    device: torch.device,
+    output_dir: Path,
+    *,
+    example_index: int | None = None,
+    filename_prefix: str = "qualitative_test",
+    title: str | None = None,
+) -> tuple[int, list[str]]:
+    """Write one readable persistence/network/gold comparison per horizon."""
+    if example_index is None:
+        candidate_count = min(len(dataset), 200)
+        example_index = max(range(candidate_count), key=lambda item: float(dataset[item][1].max()))
+    if not 0 <= example_index < len(dataset):
+        raise IndexError(f"Índice qualitativo fora do dataset de teste: {example_index}")
+    inputs, target = dataset[example_index]
     with torch.no_grad():
         prediction = torch.clamp(model(inputs[None].to(device)), 0.0, 1.0)[0].cpu()
     persistence = predict_persistence(inputs[None], target.shape[1])[0]
-    figure, axes = plt.subplots(4, target.shape[1], figsize=(3 * target.shape[1], 10), squeeze=False)
-    rows = (("Último frame de entrada", inputs[:, -1]), ("Persistência", persistence),
-            ("STConvS2S", prediction), ("Frame observado", target))
-    for row, (label, image) in enumerate(rows):
-        for horizon in range(target.shape[1]):
-            frame = image if image.ndim == 3 else image[:, horizon]
-            axes[row, horizon].imshow(frame.permute(1, 2, 0).numpy())
-            axes[row, horizon].axis("off")
-            if row == 0:
-                axes[row, horizon].set_title(f"T+{15 * (horizon + 1)} min")
-        axes[row, 0].set_ylabel(label)
-    figure.tight_layout()
-    figure.savefig(output_path, dpi=150)
-    plt.close(figure)
-    return index
+    input_frame = inputs[:, -1]
+    files = []
+    for horizon in range(target.shape[1]):
+        minutes = 15 * (horizon + 1)
+        figure, axes = plt.subplots(2, 2, figsize=(10, 10), squeeze=False)
+        panels = (
+            ("Último frame de entrada (T-15)", input_frame),
+            (f"Persistência: T+{minutes} min", persistence[:, horizon]),
+            (f"STConvS2S: T+{minutes} min", prediction[:, horizon]),
+            (f"Gold observado: T+{minutes} min", target[:, horizon]),
+        )
+        for axis, (label, frame) in zip(axes.flat, panels):
+            axis.imshow(frame.permute(1, 2, 0).numpy())
+            axis.set_title(label)
+            axis.axis("off")
+        if title:
+            figure.suptitle(title)
+            figure.tight_layout(rect=(0, 0, 1, 0.96))
+        else:
+            figure.tight_layout()
+        filename = f"{filename_prefix}_T+{minutes:02d}.png"
+        figure.savefig(output_dir / filename, dpi=180)
+        plt.close(figure)
+        files.append(filename)
+    return example_index, files
 
 
 def main() -> None:
@@ -228,10 +250,11 @@ def main() -> None:
     state = torch.load(best_path, map_location=device, weights_only=False)
     model.load_state_dict(state["model_state_dict"])
     test_network, test_persistence = evaluate(model, test_loader, device, args)
-    example_index = render_example(model, test_data, device, run_dir / "qualitative_test_example.png")
+    example_index, qualitative_files = render_example(model, test_data, device, run_dir)
     summary = {"model": args.model, "best_epoch": best_epoch, "best_validation_active_echo_mae": best_active_mae,
                "elapsed_seconds": time.monotonic() - started, "test_metrics": test_network,
                "persistence_test_metrics": test_persistence, "qualitative_test_example_index": example_index,
+               "qualitative_figures": qualitative_files,
                "history": history}
     (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Complete | test RGB MAE={test_network['global']['mae']:.6f} | active-echo MAE={test_network['active_echo']['mae']:.6f}", flush=True)
