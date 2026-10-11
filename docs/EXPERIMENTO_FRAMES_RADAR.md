@@ -203,3 +203,44 @@ Uma formulação segura para a conclusão oral é: ``A STConvS2S aprendeu a
 reduzir o erro médio dos frames RGB em horizontes maiores, mas a análise dos
 pixels com eco e da figura qualitativa mostra que ainda não podemos interpretar
 o resultado como melhoria na previsão de precipitação.''
+
+## Figuras recomendadas para Leonardo
+
+Para a apresentação, foi selecionado um caso chuvoso do **teste independente
+de 2023**, e não do conjunto de validação: a sequência cujo primeiro horizonte
+futuro começa em 7 de fevereiro de 2023 às 20:15 UTC. O máximo observado nas
+33 estações do AlertaRio ao longo dos cinco horizontes foi 33,8 mm/15 min.
+
+As figuras aprovadas para uso estão em:
+
+```text
+outputs/experiments/Leonardo-radar-rgb-stconvs2s-seed-1000/
+showcases/wet-2023-0207/
+```
+
+| Arquivo | Horizonte |
+|---|---:|
+| `wet-2023-0207_T+15.png` | 15 min |
+| `wet-2023-0207_T+30.png` | 30 min |
+| `wet-2023-0207_T+45.png` | 45 min |
+| `wet-2023-0207_T+60.png` | 60 min |
+| `wet-2023-0207_T+75.png` | 75 min |
+
+Cada figura deve ser lida da seguinte forma: o painel superior esquerdo é o
+último frame de radar disponível na entrada; o superior direito é a
+persistência visual; o inferior esquerdo é a previsão da STConvS2S-C; e o
+inferior direito é o frame RGB observado, denominado “gold”. O gold é o
+produto visual posterior do radar, não uma medida independente de chuva.
+
+Para os slides principais, recomenda-se mostrar T+15, T+45 e T+75 em três
+slides consecutivos ou em uma sequência animada. Ao apresentá-los, Leonardo
+deve comparar principalmente a STConvS2S-C com o gold e usar persistência
+como referência: em T+15, repetir o último frame é naturalmente competitivo;
+nos horizontes maiores, a rede pode reduzir o erro global, mas as imagens e a
+métrica de eco ativo mostram que estruturas coloridas ainda são difíceis de
+reconstruir. As duas figuras intermediárias podem ficar como material de apoio.
+
+Não usar essas imagens para afirmar que a rede previu chuva em milímetros,
+refletividade calibrada ou um alerta operacional. A formulação apropriada é
+que elas ilustram a previsão de imagens RGB do radar em um evento que,
+retrospectivamente, teve chuva forte registrada pelas estações.
