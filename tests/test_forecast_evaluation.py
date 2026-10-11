@@ -15,6 +15,7 @@ from nowcasting.forecast_evaluation import (
 )
 from nowcasting.cli.export_radar_checkpoint_records import export_years, normalize_configuration, stconvs2s_root
 from nowcasting.cli.evaluate_forecast_events import calibrated_threshold
+from nowcasting.forecast_ensemble import blend_horizons, select_horizon_weights
 
 
 def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
@@ -109,6 +110,16 @@ class ForecastEvaluationTests(unittest.TestCase):
         skill = skill_scores(baseline, candidate)
         self.assertGreater(skill["global"]["mae_skill"], 0.0)
         self.assertEqual(set(skill["horizons"]), {"1", "2"})
+
+    def test_horizon_ensemble_selects_validation_weights_and_blends_test_records(self):
+        baseline = records((0.0, 10.0, 0.0, 10.0))
+        candidate = records((10.0, 0.0, 10.0, 0.0))
+        weights, candidates = select_horizon_weights(baseline, candidate, [0.0, 0.5, 1.0])
+        self.assertEqual(weights, {1: 0.0, 2: 1.0})
+        self.assertEqual(len(candidates[1]), 3)
+        blended = blend_horizons(baseline, candidate, weights, experiment_id="B3")
+        self.assertEqual(list(blended["experiment_id"].unique()), ["B3"])
+        self.assertEqual(list(blended["predicted_mm_15min"]), [0.0, 0.0, 0.0, 0.0])
 
     def test_station_metrics_and_intensity_bootstrap_are_available(self):
         baseline = records((0.0, 0.0, 0.0, 0.0))
