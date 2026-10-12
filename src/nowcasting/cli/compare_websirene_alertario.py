@@ -81,6 +81,16 @@ def main() -> None:
 
     web = load_websirene(args.websirene_root, set(pairs["websirene_station_id"]), args.year_start, args.year_end)
     reference = load_alertario(args.alertario_root, set(pairs["alertario_station_id"]), args.year_start, args.year_end)
+    if web.empty:
+        raise RuntimeError(
+            "Nenhuma observação WebSirene aceita foi encontrada para os pares/anos solicitados. "
+            "Verifique --websirene-root e a execução da auditoria."
+        )
+    if reference.empty:
+        raise RuntimeError(
+            "Nenhuma observação AlertaRio foi encontrada para os pares/anos solicitados. "
+            "Verifique --alertario-root e o mapeamento de estações."
+        )
     results = []
     for offset_minutes in args.websirene_to_reference_offset_minutes:
         for pair in pairs.itertuples(index=False):
