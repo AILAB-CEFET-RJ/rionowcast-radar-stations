@@ -84,8 +84,10 @@ pendentes acima.
   `causality_errors=0`.
 - [x] Processar e auditar C13 em 2022 (99,57\%), 2023 (99,69\%) e 2024
   (99,21\%), todos sem erro causal.
-- [ ] Processar e auditar C13 em 2018--2021.
-- [ ] Comparar C3 restrito (2018--2024) com radar + estações lagadas + ABI.
+- [x] Processar e auditar C13 em 2018--2021, completando a cobertura experimental de 2018--2024.
+- [x] Executar ablação C4R de concatenação precoce de C13 contra controle com a mesma disponibilidade causal; o ganho não foi reproduzível entre três seeds.
+- [x] Executar C5R com ramos RGB e C13 separados, fusão tardia condicionada ao eco RGB e controle pareado de capacidade com C13 zerado; o ganho não foi reproduzível entre três seeds.
+- [x] Reportar C5R separado entre eco RGB local fraco ($\leq 0{,}05$) e eco presente, além das métricas globais e de alerta; a estratificação e os alertas não sustentaram o uso de C13 no modelo atual.
 - [ ] Integrar GLM somente após estabelecer o ganho marginal dos canais ABI.
 - [ ] Criar contrato GOES-19 para o bucket `noaa-goes19`, preservando a seleção
   causal por término de cena e registrando satélite, configuração e grade nos

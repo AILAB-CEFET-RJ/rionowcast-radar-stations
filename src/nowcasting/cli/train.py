@@ -35,7 +35,7 @@ from nowcasting.losses import (
     WeightedMaskedMAELoss,
 )
 from nowcasting.station_dataset import load_station_pixels
-from nowcasting.residual_persistence import build_forecaster
+from nowcasting.residual_persistence import build_forecaster, uses_persistence_baseline
 from nowcasting.paths import project_root
 
 
@@ -56,7 +56,7 @@ RESUME_CONFIG_KEYS = (
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
-    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "require_goes_availability", "forecast_formulation", "crop",
+    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "require_goes_availability", "forecast_formulation", "conditional_goes_control", "crop",
     "radar_capture_preprocessing", "goes_preprocessing",
 )
 
@@ -133,8 +133,13 @@ def parse_arguments() -> argparse.Namespace:
         help="Filtra sequências por disponibilidade causal de GOES sem acrescentar GOES à entrada; use no controle pareado.",
     )
     parser.add_argument(
-        "--forecast-formulation", choices=("direct", "residual-persistence"), default="direct",
-        help="direct prevê chuva diretamente; residual-persistence soma correção do radar à persistência causal B1.",
+        "--forecast-formulation", choices=("direct", "residual-persistence", "conditional-late-fusion"), default="direct",
+        help=("direct prevê chuva diretamente; residual-persistence soma correção à persistência causal B1; "
+              "conditional-late-fusion usa ramos RGB e GOES separados, com porta C13 condicionada ao eco RGB."),
+    )
+    parser.add_argument(
+        "--conditional-goes-control", action="store_true",
+        help="No modo conditional-late-fusion, zera C13 antes do ramo GOES para criar controle pareado de capacidade.",
     )
     parser.add_argument(
         "--station-mapping", type=Path,
@@ -535,6 +540,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         model_type, sample_x, sample_y, num_layers=args.num_layers, hidden_dim=args.hidden_dim,
         kernel_size=args.kernel_size, device=device, step=args.step,
         forecast_formulation=args.forecast_formulation, input_stations=args.input_stations,
+        input_goes=args.input_goes,
+        conditional_goes_control=args.conditional_goes_control,
     ).to(device)
     if args.distributed:
         model = DistributedDataParallel(model, device_ids=[device.index])
@@ -546,7 +553,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}\n"
         f"Input channels | radar=3 | goes={sample_x.shape[0] - 3 - (2 if args.input_stations else 0)} | stations={2 if args.input_stations else 0} | "
         f"total={sample_x.shape[0]} | formulation={args.forecast_formulation} | "
-        f"STConvS2S channels={sample_x.shape[0] - (2 if args.forecast_formulation == 'residual-persistence' else 0)}\n"
+        f"STConvS2S channels={'radar=3, goes=' + str(sample_x.shape[0] - 5) if args.forecast_formulation == 'conditional-late-fusion' else sample_x.shape[0] - (2 if uses_persistence_baseline(args.forecast_formulation) else 0)}\n"
         f"DataLoader | workers={args.workers} | pin_memory={args.pin_memory} | "
         f"persistent_workers={args.persistent_workers} | "
         f"prefetch_factor={args.prefetch_factor if args.workers else 'n/a'}",
@@ -690,7 +697,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     locations = station_locations(test_dataset, args)
     _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
                           station_locations=locations,
-                          residual_persistence=args.forecast_formulation == "residual-persistence")
+                          residual_persistence=uses_persistence_baseline(args.forecast_formulation))
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
@@ -719,8 +726,12 @@ def main() -> None:
         raise ValueError("Parâmetros de treino e dimensões do mapeamento devem ser positivos; workers, log-interval e crop-margin-pixels não podem ser negativos.")
     if args.persistent_workers and not args.workers:
         raise ValueError("--persistent-workers requer --workers maior que zero.")
-    if args.forecast_formulation == "residual-persistence" and not args.input_stations:
-        raise ValueError("--forecast-formulation residual-persistence requer --input-stations.")
+    if uses_persistence_baseline(args.forecast_formulation) and not args.input_stations:
+        raise ValueError(f"--forecast-formulation {args.forecast_formulation} requer --input-stations.")
+    if args.forecast_formulation == "conditional-late-fusion" and not args.input_goes:
+        raise ValueError("--forecast-formulation conditional-late-fusion requer --input-goes.")
+    if args.conditional_goes_control and args.forecast_formulation != "conditional-late-fusion":
+        raise ValueError("--conditional-goes-control requer --forecast-formulation conditional-late-fusion.")
 
     rank, world_size, device = distributed_context(args.distributed)
     if args.pin_memory is None:

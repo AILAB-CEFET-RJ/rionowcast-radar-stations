@@ -12,6 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from nowcasting.forecast_evaluation import (
     align_records, event_metrics, evaluate_records, paired_daily_bootstrap, select_decision_threshold, skill_scores,
+    stratify_by_radar_echo,
 )
 from nowcasting.cli.export_radar_checkpoint_records import export_years, normalize_configuration, stconvs2s_root
 from nowcasting.cli.calibrate_alert_thresholds import load_forecasts
@@ -27,6 +28,7 @@ def records(prediction=(0.0, 2.0, 2.0, 0.0)) -> pd.DataFrame:
         "horizon": [1, 2, 1, 2], "station_id": [1] * 4,
         "predicted_mm_15min": prediction, "observed_mm_15min": [0.0, 2.0, 0.0, 2.0],
         "is_observed": [True] * 4,
+        "radar_echo_fraction": [0.0, 0.02, 0.1, 0.5],
     })
 
 
@@ -153,6 +155,12 @@ class ForecastEvaluationTests(unittest.TestCase):
             baseline, candidate, [1.25], replicates=20, seed=7, intensity=(1.25, 6.25),
         )
         self.assertGreater(bootstrap["skill_mae"]["estimate"], 0.0)
+
+    def test_echo_strata_follow_the_conditional_pilot_threshold(self):
+        strata = stratify_by_radar_echo(records(), low_echo_max=0.05)
+        self.assertEqual(len(strata["low_echo"]), 2)
+        self.assertEqual(len(strata["echo_present"]), 2)
+        self.assertTrue((strata["low_echo"]["radar_echo_fraction"] <= 0.05).all())
 
 
 if __name__ == "__main__":
