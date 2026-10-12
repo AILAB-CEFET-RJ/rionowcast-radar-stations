@@ -98,3 +98,27 @@ operacionalmente inaceitável nos alertas moderados e fortes.
 Registros antigos não têm a coluna de eco e devem ser reexportados antes da
 estratificação. A métrica global continua obrigatória: estratificação é uma
 análise de hipótese, não uma substituição seletiva do teste final.
+
+## Resultado e Decisão
+
+Foram executadas três seeds independentes. Na seed 1000, C13 reduziu MAE de
+0,068983 para 0,065535 e RMSE de 0,560617 para 0,536640. O resultado não se
+reproduziu: nas seeds 1001 e 1002, C13 elevou RMSE de 0,548119 para 0,556948
+e de 0,543638 para 0,552025, respectivamente. As diferenças de MAE também
+foram pequenas e inconsistentes.
+
+A estratificação não confirmou de forma útil a hipótese condicional. O
+estrato de eco fraco concentrou a maior parte dos pares e foi dominado por
+chuva fraca ou seca; nele, os ganhos de MAE foram muito pequenos e não houve
+padrão estável nas faixas moderada, forte e extrema. No estrato com eco
+presente, a seed 1000 melhorou substancialmente, mas as outras duas pioraram.
+
+Os alertas calibrados reforçaram essa conclusão. Para 6,25~mm/15~min no proxy
+municipal, a fração de eventos detectados variou entre $-1,5$, $+0,5$ e
+0,0 pontos percentuais entre as seeds, sem mudança na antecedência mediana.
+Para 12,5~mm/15~min, a seed 1000 reduziu falsos alertas ao custo de perder
+eventos, enquanto as demais seeds não apresentaram ganho consistente.
+
+Portanto, C5R é uma segunda ablação negativa: a fusão tardia condicionada não
+justifica o uso de C13 no modelo atual. Novas variações arquiteturais de C13
+não devem ser priorizadas antes de ampliar e auditar a supervisão espacial.
