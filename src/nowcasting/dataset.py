@@ -57,6 +57,7 @@ class RadarStationMemmapDataset(Dataset):
         crop_margin_pixels: int = 20,
         input_stations: bool = False,
         input_goes: bool = False,
+        require_goes_availability: bool = False,
         station_mapping: str | Path | None = None,
         mapping_height_orig: int = 656,
         mapping_width_orig: int = 654,
@@ -72,6 +73,7 @@ class RadarStationMemmapDataset(Dataset):
         self.crop_margin_pixels = crop_margin_pixels
         self.input_stations = input_stations
         self.input_goes = input_goes
+        self.require_goes_availability = require_goes_availability
         self.station_mapping = Path(station_mapping) if station_mapping else None
         self.mapping_height_orig = mapping_height_orig
         self.mapping_width_orig = mapping_width_orig
@@ -199,7 +201,7 @@ class RadarStationMemmapDataset(Dataset):
             dtype=np.dtype(radar_metadata["dtype"]), mode="r", shape=radar_shape,
         )
         goes_data: dict[str, np.memmap | np.ndarray] = {}
-        if self.input_goes:
+        if self.input_goes or self.require_goes_availability:
             goes_dir = year_dir / "goes16"
             goes_metadata_path = goes_dir / "metadata.json"
             if not goes_metadata_path.is_file():
@@ -230,11 +232,12 @@ class RadarStationMemmapDataset(Dataset):
             available = np.load(availability_path, allow_pickle=False).astype(bool)
             if len(available) != radar_shape[0]:
                 raise ValueError(f"{year}: disponibilidade GOES tem {len(available)} entradas para {radar_shape[0]} frames de radar.")
-            goes_data = {
-                "goes": np.memmap(goes_dir / goes_metadata.get("frames_file", "goes_frames.dat"), dtype=np.dtype(goes_metadata.get("dtype", "float32")), mode="r", shape=goes_shape),
-                "goes_available": available,
-                "goes_normalization": goes_metadata.get("normalization", {}),
-            }
+            goes_data = {"goes_available": available}
+            if self.input_goes:
+                goes_data.update({
+                    "goes": np.memmap(goes_dir / goes_metadata.get("frames_file", "goes_frames.dat"), dtype=np.dtype(goes_metadata.get("dtype", "float32")), mode="r", shape=goes_shape),
+                    "goes_normalization": goes_metadata.get("normalization", {}),
+                })
         if target_metadata.get("format") == "sparse":
             sparse_path = year_dir / target_metadata["sparse_file"]
             if not sparse_path.is_file():
@@ -281,7 +284,7 @@ class RadarStationMemmapDataset(Dataset):
                 print(f"[{self.split_name}] Ano {year} | descartadas {discarded} amostras que cruzam lacunas do radar", flush=True)
         else:
             candidate_starts = list(candidate_starts)
-        if self.input_goes:
+        if self.input_goes or self.require_goes_availability:
             before_goes = len(candidate_starts)
             available = self.year_data[year]["goes_available"]
             candidate_starts = [start for start in candidate_starts if bool(np.all(available[start:start + self.t_in]))]

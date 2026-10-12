@@ -19,6 +19,7 @@ def normalize_configuration(configuration: dict) -> dict:
     """Fill defaults introduced after legacy experiments were trained."""
     normalized = dict(configuration)
     normalized.setdefault("input_goes", False)
+    normalized.setdefault("require_goes_availability", False)
     required = ("dataset_root", "test_years", "step", "stride", "model", "num_layers", "hidden_dim",
                 "kernel_size", "stconvs2s_root", "target_source", "station_mapping", "mapping_height_orig",
                 "mapping_width_orig", "crop_stations", "crop_margin_pixels", "input_stations")
@@ -89,7 +90,8 @@ def main() -> None:
         t_out=int(configuration["step"]), stride=int(configuration["stride"] or configuration["step"]),
         target_source=configuration["target_source"], split_name="export", crop_stations=configuration["crop_stations"],
         crop_margin_pixels=int(configuration["crop_margin_pixels"]), input_stations=configuration["input_stations"],
-        input_goes=configuration["input_goes"], station_mapping=configuration["station_mapping"],
+        input_goes=configuration["input_goes"], require_goes_availability=configuration["require_goes_availability"],
+        station_mapping=configuration["station_mapping"],
         mapping_height_orig=int(configuration["mapping_height_orig"]), mapping_width_orig=int(configuration["mapping_width_orig"]),
     )
     pixels, ids = station_pixels(dataset, configuration)
