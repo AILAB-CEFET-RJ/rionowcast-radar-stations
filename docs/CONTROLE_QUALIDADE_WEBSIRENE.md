@@ -70,12 +70,14 @@ nowcasting-compare-websirene-alertario \
   --year-end 2024 \
   --max-distance-km 5 \
   --min-pairs 100 \
+  --wet-threshold-mm15 1.25 \
   --websirene-to-reference-offset-minutes -30 -15 0 15 30
 ```
 
 Esta comparacao e evidência adicional, nao substitui a revisao de eventos extremos:
 pluviometros proximos podem divergir por variabilidade espacial real da chuva.
-O relatório contém uma linha por par e por offset; o offset só deve ser adotado
+O relatório contém uma linha por par e por offset, com métricas globais e
+condicionadas a chuva em pelo menos uma das redes. O offset só deve ser adotado
 para gerar targets se a comparação mostrar uma vantagem consistente e plausível.
 
 ## Gerar Targets Auditados

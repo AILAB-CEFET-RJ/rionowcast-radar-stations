@@ -309,18 +309,35 @@ def nearest_reference_stations(
     return pd.DataFrame(rows)
 
 
-def paired_metrics(pairs: pd.DataFrame) -> dict[str, float | int | None]:
+def paired_metrics(pairs: pd.DataFrame, wet_threshold_mm15: float | None = None) -> dict[str, float | int | None]:
     """Compute transparent agreement metrics for timestamp-aligned station readings."""
     pairs = pairs.dropna(subset=["websirene_m15", "reference_m15"])
     if pairs.empty:
-        return {"n": 0, "mae": None, "bias": None, "pearson_r": None}
+        metrics: dict[str, float | int | None] = {"n": 0, "mae": None, "bias": None, "pearson_r": None}
+        if wet_threshold_mm15 is not None:
+            metrics.update({"wet_union_n": 0, "wet_union_mae": None, "wet_union_bias": None,
+                            "wet_union_pearson_r": None})
+        return metrics
     error = pairs["websirene_m15"] - pairs["reference_m15"]
     correlation = None
     if pairs["websirene_m15"].nunique() > 1 and pairs["reference_m15"].nunique() > 1:
         correlation = pairs["websirene_m15"].corr(pairs["reference_m15"])
-    return {
+    metrics = {
         "n": int(len(pairs)),
         "mae": float(error.abs().mean()),
         "bias": float(error.mean()),
         "pearson_r": float(correlation) if correlation is not None and pd.notna(correlation) else None,
     }
+    if wet_threshold_mm15 is not None:
+        wet_pairs = pairs.loc[
+            (pairs["websirene_m15"] >= wet_threshold_mm15)
+            | (pairs["reference_m15"] >= wet_threshold_mm15)
+        ]
+        wet_metrics = paired_metrics(wet_pairs)
+        metrics.update({
+            "wet_union_n": wet_metrics["n"],
+            "wet_union_mae": wet_metrics["mae"],
+            "wet_union_bias": wet_metrics["bias"],
+            "wet_union_pearson_r": wet_metrics["pearson_r"],
+        })
+    return metrics

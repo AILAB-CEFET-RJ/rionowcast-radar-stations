@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--year-end", type=int, required=True)
     parser.add_argument("--max-distance-km", type=float, default=5.0)
     parser.add_argument("--min-pairs", type=int, default=100)
+    parser.add_argument("--wet-threshold-mm15", type=float, default=1.25,
+                        help="Limiar para métricas condicionadas a chuva em ao menos uma das redes.")
     parser.add_argument(
         "--websirene-to-reference-offset-minutes", type=int, nargs="+", default=[0],
         help="Offsets aplicados ao timestamp WebSirene antes do pareamento (padrão: 0).",
@@ -107,7 +109,7 @@ def main() -> None:
                 ref_values["timestamp_15min"], utc=True, errors="coerce"
             )
             aligned = web_values.merge(ref_values, on="timestamp_15min", how="inner")
-            metrics = paired_metrics(aligned)
+            metrics = paired_metrics(aligned, wet_threshold_mm15=args.wet_threshold_mm15)
             results.append({
                 "websirene_station_id": pair.websirene_station_id,
                 "alertario_station_id": pair.alertario_station_id,
