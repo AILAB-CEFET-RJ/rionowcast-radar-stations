@@ -32,6 +32,7 @@ def export_flat_station_forecasts(
         _, target, mask = dataset[sample_index]
         target_values = np.expm1(target.numpy()[0][:, station_pixels[:, 0], station_pixels[:, 1]])
         observed = mask.numpy()[0][:, station_pixels[:, 0], station_pixels[:, 1]] > 0
+        echo_fraction = dataset.local_rgb_echo_fraction(sample_index, station_pixels)
         current = np.maximum(np.expm1(prediction[offset:offset + dataset.t_out * len(station_ids)]), 0.0)
         current = current.reshape(dataset.t_out, len(station_ids))
         offset += dataset.t_out * len(station_ids)
@@ -42,13 +43,16 @@ def export_flat_station_forecasts(
                              "horizon": horizon + 1, "station_id": station_id,
                              "predicted_mm_15min": float(current[horizon, station_index]),
                              "observed_mm_15min": float(target_values[horizon, station_index]),
-                             "is_observed": bool(observed[horizon, station_index])})
+                             "is_observed": bool(observed[horizon, station_index]),
+                             "radar_echo_fraction": float(echo_fraction[station_index])})
     output.parent.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(rows)
     frame.to_parquet(output, index=False)
     metadata = {"format": "station_forecast_records_v1", "experiment_id": experiment_id,
                 "rows": len(frame), "years": sorted({int(year) for year, _ in dataset.samples}),
                 "t_in": dataset.t_in, "t_out": dataset.t_out, "stride": dataset.stride,
-                "station_count": len(station_ids), "prediction_unit": "mm/15min"}
+                "station_count": len(station_ids), "prediction_unit": "mm/15min",
+                "radar_context": {"field": "radar_echo_fraction", "frame": "last_input",
+                                  "definition": "fraction of non-black RGB pixels in radius-two station neighborhood"}}
     output.with_suffix(output.suffix + ".json").write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return metadata

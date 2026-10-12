@@ -195,6 +195,18 @@ class NowcastingDatasetTests(unittest.TestCase):
             x, _, _ = control[0]
             self.assertEqual(tuple(x.shape), (3, 2, 2, 2))
 
+    def test_local_rgb_echo_fraction_uses_last_input_frame_and_station_neighborhood(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            year_dir = root / "year=2020"
+            radar = np.memmap(year_dir / "radar_frames.dat", dtype=np.uint8, mode="r+", shape=(12, 2, 2, 3))
+            radar[4, 0, 0, 0] = 255  # Last input frame for the only stride-five sample.
+            radar.flush()
+            dataset = RadarStationMemmapDataset(root, [2020], stride=5)
+            echo = dataset.local_rgb_echo_fraction(0, np.array([[0, 0], [1, 1]]), radius=0)
+            self.assertEqual(echo.tolist(), [1.0, 0.0])
+
     def test_station_sequence_dataset_and_model_use_values_and_masks(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

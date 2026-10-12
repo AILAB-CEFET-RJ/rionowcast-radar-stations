@@ -371,6 +371,39 @@ class RadarStationMemmapDataset(Dataset):
             torch.from_numpy(m).permute(3, 0, 1, 2),
         )
 
+    def local_rgb_echo_fraction(
+        self, sample_index: int, station_pixels: np.ndarray, *, radius: int = 2,
+    ) -> np.ndarray:
+        """Fraction of non-black RGB pixels near each station at the last input frame.
+
+        This is the same visual echo proxy used in the conditional C13 pilot.
+        ``station_pixels`` must use the dataset's current grid, including any
+        station crop applied by this instance.
+        """
+        if radius < 0:
+            raise ValueError("O raio da vizinhança RGB não pode ser negativo.")
+        pixels = np.asarray(station_pixels, dtype=np.int64)
+        if pixels.ndim != 2 or pixels.shape[1] != 2:
+            raise ValueError("station_pixels deve ter shape [estações, 2].")
+        year, start = self.samples[sample_index]
+        row_slice, column_slice = self._crop_slices()
+        frame = np.asarray(
+            self.year_data[year]["frames"][start + self.t_in - 1, row_slice, column_slice, :3],
+            dtype=np.uint8,
+        )
+        height, width = frame.shape[:2]
+        if ((pixels[:, 0] < 0) | (pixels[:, 0] >= height) |
+                (pixels[:, 1] < 0) | (pixels[:, 1] >= width)).any():
+            raise ValueError("Estação fora da grade usada para extrair eco RGB.")
+        result = np.empty(len(pixels), dtype=np.float32)
+        for position, (row, column) in enumerate(pixels):
+            neighborhood = frame[
+                max(0, row - radius):min(height, row + radius + 1),
+                max(0, column - radius):min(width, column + radius + 1),
+            ]
+            result[position] = np.any(neighborhood != 0, axis=-1).mean(dtype=np.float64)
+        return result
+
     def get_sample_classes(
         self, thresholds: tuple[float, float, float] = (1.25, 6.25, 12.5)
     ) -> np.ndarray:

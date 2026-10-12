@@ -45,6 +45,26 @@ def align_records(named_records: dict[str, pd.DataFrame]) -> dict[str, pd.DataFr
     return aligned
 
 
+def stratify_by_radar_echo(records: pd.DataFrame, low_echo_max: float = 0.05) -> dict[str, pd.DataFrame]:
+    """Split canonical records by the last-input local RGB echo proxy.
+
+    ``radar_echo_fraction`` is attached during checkpoint export and is the
+    fraction of non-black RGB pixels within radius two of each station.  The
+    threshold defaults to the conditional C13 pilot convention.
+    """
+    if not 0.0 <= low_echo_max < 1.0:
+        raise ValueError("low_echo_max deve estar no intervalo [0, 1).")
+    if "radar_echo_fraction" not in records:
+        raise ValueError("Registros não possuem radar_echo_fraction; reexporte os checkpoints.")
+    echo = pd.to_numeric(records["radar_echo_fraction"], errors="raise")
+    if echo.isna().any() or ((echo < 0.0) | (echo > 1.0)).any():
+        raise ValueError("radar_echo_fraction deve conter valores finitos no intervalo [0, 1].")
+    return {
+        "low_echo": records.loc[echo <= low_echo_max].copy(),
+        "echo_present": records.loc[echo > low_echo_max].copy(),
+    }
+
+
 def _continuous(prediction: np.ndarray, observed: np.ndarray) -> dict:
     if not len(observed):
         return {"n": 0, "rmse": None, "mae": None, "bias": None}
