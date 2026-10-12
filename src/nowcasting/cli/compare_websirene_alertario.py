@@ -85,8 +85,17 @@ def main() -> None:
     for offset_minutes in args.websirene_to_reference_offset_minutes:
         for pair in pairs.itertuples(index=False):
             web_values = web.loc[web["station_id"] == pair.websirene_station_id].drop(columns="station_id").copy()
-            web_values["timestamp_15min"] += pd.Timedelta(minutes=offset_minutes)
-            ref_values = reference.loc[reference["station_id"] == pair.alertario_station_id].drop(columns="station_id")
+            web_values["timestamp_15min"] = pd.to_datetime(
+                web_values["timestamp_15min"], utc=True, errors="coerce"
+            ) + pd.Timedelta(minutes=offset_minutes)
+            ref_values = reference.loc[
+                reference["station_id"] == pair.alertario_station_id
+            ].drop(columns="station_id").copy()
+            # Empty DataFrames otherwise retain object dtype and cannot be merged
+            # with the timezone-aware timestamps from the non-empty source.
+            ref_values["timestamp_15min"] = pd.to_datetime(
+                ref_values["timestamp_15min"], utc=True, errors="coerce"
+            )
             aligned = web_values.merge(ref_values, on="timestamp_15min", how="inner")
             metrics = paired_metrics(aligned)
             results.append({
