@@ -30,7 +30,7 @@ O diretorio de entrada deve seguir o contrato
 
 ```bash
 nowcasting-audit-websirene \
-  --input-root data/raw/websirene \
+  --input-root data/pluviometricos_websirenes \
   --processed-root data/processed/websirene_qc/v1 \
   --analysis-dir outputs/analysis/websirene/qc/v1 \
   --config configs/websirene_qc_v1.json \
@@ -62,37 +62,43 @@ por no maximo 5 km e calcula `MAE`, viés e correlacao de Pearson em timestamps 
 ```bash
 nowcasting-compare-websirene-alertario \
   --websirene-root data/processed/websirene_qc/v1 \
-  --alertario-root data/raw/alertario/pluviometricos_parquet \
+  --alertario-root data/pluviometricos_alertario \
   --websirene-mapping data/mapeamento_pixel_estacao.csv \
-  --alertario-mapping data/mapeamento_pixel_estacao_alertario.csv \
+  --alertario-mapping configs/mapeamento_pixel_estacao_alertario_capture_crop_v1.csv \
   --output-dir outputs/analysis/websirene/qc/v1/alertario_comparison \
   --year-start 2012 \
   --year-end 2024 \
   --max-distance-km 5 \
-  --min-pairs 100
+  --min-pairs 100 \
+  --websirene-to-reference-offset-minutes -30 -15 0 15 30
 ```
 
 Esta comparacao e evidência adicional, nao substitui a revisao de eventos extremos:
 pluviometros proximos podem divergir por variabilidade espacial real da chuva.
+O relatório contém uma linha por par e por offset; o offset só deve ser adotado
+para gerar targets se a comparação mostrar uma vantagem consistente e plausível.
 
 ## Gerar Targets Auditados
 
-O gerador legado `nowcasting-build-websirene-targets --ws-root ...` mantem o corte
-historico de 50 mm/15 min. Para o novo experimento, use a fonte auditada. Apenas
-linhas `qc_status=accepted` sao consumidas, e nao ha novo corte por intensidade:
+O gerador usa somente a fonte auditada e a whitelist. Ele grava targets esparsos
+separados dos alvos do AlertaRio (`targets_websirene_sparse.npz`), sem
+sobrescrevê-los. Quando diversas estações ocupam a mesma célula de 128~x~128,
+suas leituras aceitas são agregadas pela mediana; o número de estações é preservado
+no artefato. Escolha o offset apenas depois da comparação temporal:
 
 ```bash
 nowcasting-build-websirene-targets \
   --qc-root data/processed/websirene_qc/v1 \
   --station-whitelist outputs/analysis/websirene/qc/v1/station_whitelist.csv \
   --mapping data/mapeamento_pixel_estacao.csv \
-  --radar-root data/datasets/radar_sumare_2012_2024_15min_128_por_ano \
+  --radar-root data/datasets/radar_sumare_2012_2024_15min_128_audited_v3 \
   --year-start 2012 \
   --year-end 2024 \
   --height 128 \
   --width 128 \
   --height-orig 656 \
-  --width-orig 654
+  --width-orig 654 \
+  --observation-to-radar-offset-minutes <OFFSET_VALIDADO>
 ```
 
 O primeiro experimento com WebSirene deve usar somente a whitelist e reportar

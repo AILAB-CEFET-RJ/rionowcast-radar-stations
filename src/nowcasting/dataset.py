@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 
 
 TARGET_METADATA_FILES = {
-    "websirene": "targets_metadata.json",
+    "websirene": "targets_websirene_metadata.json",
     "alertario": "targets_alertario_metadata.json",
 }
 

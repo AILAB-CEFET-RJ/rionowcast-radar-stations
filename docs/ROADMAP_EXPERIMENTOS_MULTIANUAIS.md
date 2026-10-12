@@ -64,10 +64,13 @@ disco sem alterar a arquitetura STConvS2S.
   fonte bruta.
 - [x] Implementar comparação temporal opcional entre WebSirene auditado e
   AlertaRio próximo.
-- [ ] Executar a auditoria V1 sobre os Parquets reais, revisar os eventos
-  suspeitos e validar a whitelist.
-- [ ] Gerar targets WebSirene somente a partir da whitelist auditada e executar
-  um smoke test antes de adicioná-los a qualquer experimento comparativo.
+- [x] Executar a auditoria V1 sobre os Parquets reais: 83 estações, 80 aprovadas
+  preliminarmente e 27.710.098 observações aceitas em 2012--2024.
+- [ ] Revisar os eventos suspeitos, comparar WebSirene e AlertaRio próximo em
+  offsets temporais candidatos e validar a convenção de timestamp `m15`.
+- [ ] Gerar targets WebSirene esparsos somente a partir da whitelist auditada,
+  com agregação explícita das estações que compartilham uma célula de 128 x 128,
+  e executar um smoke test antes de qualquer experimento comparativo.
 
 O protocolo, limiares iniciais e comandos estão documentados em
 [`CONTROLE_QUALIDADE_WEBSIRENE.md`](CONTROLE_QUALIDADE_WEBSIRENE.md). A rede

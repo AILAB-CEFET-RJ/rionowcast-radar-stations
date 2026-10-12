@@ -23,6 +23,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--year-end", type=int, required=True)
     parser.add_argument("--max-distance-km", type=float, default=5.0)
     parser.add_argument("--min-pairs", type=int, default=100)
+    parser.add_argument(
+        "--websirene-to-reference-offset-minutes", type=int, nargs="+", default=[0],
+        help="Offsets aplicados ao timestamp WebSirene antes do pareamento (padrão: 0).",
+    )
     return parser.parse_args()
 
 
@@ -78,18 +82,21 @@ def main() -> None:
     web = load_websirene(args.websirene_root, set(pairs["websirene_station_id"]), args.year_start, args.year_end)
     reference = load_alertario(args.alertario_root, set(pairs["alertario_station_id"]), args.year_start, args.year_end)
     results = []
-    for pair in pairs.itertuples(index=False):
-        web_values = web.loc[web["station_id"] == pair.websirene_station_id].drop(columns="station_id")
-        ref_values = reference.loc[reference["station_id"] == pair.alertario_station_id].drop(columns="station_id")
-        aligned = web_values.merge(ref_values, on="timestamp_15min", how="inner")
-        metrics = paired_metrics(aligned)
-        results.append({
-            "websirene_station_id": pair.websirene_station_id,
-            "alertario_station_id": pair.alertario_station_id,
-            "distance_km": pair.distance_km,
-            **metrics,
-            "meets_min_pairs": metrics["n"] >= args.min_pairs,
-        })
+    for offset_minutes in args.websirene_to_reference_offset_minutes:
+        for pair in pairs.itertuples(index=False):
+            web_values = web.loc[web["station_id"] == pair.websirene_station_id].drop(columns="station_id").copy()
+            web_values["timestamp_15min"] += pd.Timedelta(minutes=offset_minutes)
+            ref_values = reference.loc[reference["station_id"] == pair.alertario_station_id].drop(columns="station_id")
+            aligned = web_values.merge(ref_values, on="timestamp_15min", how="inner")
+            metrics = paired_metrics(aligned)
+            results.append({
+                "websirene_station_id": pair.websirene_station_id,
+                "alertario_station_id": pair.alertario_station_id,
+                "distance_km": pair.distance_km,
+                "websirene_to_reference_offset_minutes": offset_minutes,
+                **metrics,
+                "meets_min_pairs": metrics["n"] >= args.min_pairs,
+            })
     comparison = pd.DataFrame(results)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pairs.to_csv(args.output_dir / "nearest_station_pairs.csv", index=False)
