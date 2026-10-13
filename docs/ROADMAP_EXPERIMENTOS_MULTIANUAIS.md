@@ -66,11 +66,18 @@ disco sem alterar a arquitetura STConvS2S.
   AlertaRio próximo.
 - [x] Executar a auditoria V1 sobre os Parquets reais: 83 estações, 80 aprovadas
   preliminarmente e 27.710.098 observações aceitas em 2012--2024.
-- [ ] Revisar os eventos suspeitos, comparar WebSirene e AlertaRio próximo em
-  offsets temporais candidatos e validar a convenção de timestamp `m15`.
-- [ ] Gerar targets WebSirene esparsos somente a partir da whitelist auditada,
-  com agregação explícita das estações que compartilham uma célula de 128 x 128,
-  e executar um smoke test antes de qualquer experimento comparativo.
+- [x] Comparar WebSirene e AlertaRio próximo em offsets temporais candidatos;
+  offset zero foi o melhor também sob chuva (MAE ponderado de 1,94 mm/15 min e
+  correlação mediana de 0,478), sustentando a convenção temporal `m15` atual.
+- [x] Gerar targets WebSirene esparsos somente a partir da whitelist auditada,
+  com agregação `median` das estações que compartilham uma célula de 128 x 128,
+  e executar smoke test ponta a ponta do loader em 2012--2024.
+- [x] Implementar supervisão auxiliar WebSirene no treino, mantendo AlertaRio
+  como target primário de validação e teste e normalizando cada loss por sua
+  própria máscara.
+- [ ] Selecionar o peso da loss WebSirene exclusivamente em 2022 e executar
+  controle pareado mais três seeds no split cronológico 2012--2021 / 2022 /
+  2023--2024; avaliar somente contra AlertaRio.
 
 O protocolo, limiares iniciais e comandos estão documentados em
 [`CONTROLE_QUALIDADE_WEBSIRENE.md`](CONTROLE_QUALIDADE_WEBSIRENE.md). A rede

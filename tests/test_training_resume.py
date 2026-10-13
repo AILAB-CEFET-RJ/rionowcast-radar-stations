@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from nowcasting.cli import train as train_nowcasting
+from nowcasting.losses import MaskedMAELoss
 
 
 def configuration() -> dict:
@@ -43,6 +44,22 @@ def configuration() -> dict:
 
 
 class TrainingResumeTests(unittest.TestCase):
+    def test_auxiliary_loss_is_added_after_independent_masked_normalization(self):
+        prediction = torch.zeros((1, 1, 1, 1, 2))
+        primary_target = torch.tensor([[[[[1.0, 99.0]]]]])
+        primary_mask = torch.tensor([[[[[1.0, 0.0]]]]])
+        auxiliary_target = torch.tensor([[[[[99.0, 3.0]]]]])
+        auxiliary_mask = torch.tensor([[[[[0.0, 1.0]]]]])
+
+        total, primary, auxiliary = train_nowcasting.supervised_training_loss(
+            MaskedMAELoss(), prediction, primary_target, primary_mask,
+            auxiliary_target, auxiliary_mask, auxiliary_weight=0.5,
+        )
+
+        self.assertAlmostEqual(primary.item(), 1.0, places=5)
+        self.assertAlmostEqual(auxiliary.item(), 3.0, places=5)
+        self.assertAlmostEqual(total.item(), 2.5, places=5)
+
     def test_radar_metrics_include_station_coordinates(self):
         output = torch.zeros((1, 1, 1, 2, 2))
         target = torch.zeros_like(output)

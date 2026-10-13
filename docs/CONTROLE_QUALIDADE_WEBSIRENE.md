@@ -103,5 +103,7 @@ nowcasting-build-websirene-targets \
   --observation-to-radar-offset-minutes <OFFSET_VALIDADO>
 ```
 
-O primeiro experimento com WebSirene deve usar somente a whitelist e reportar
-separadamente o desempenho por rede e por faixa de intensidade.
+O primeiro experimento deve usar somente a whitelist e tratar WebSirene como
+supervisao auxiliar, mantendo AlertaRio como target primario de validacao e
+teste. O contrato e os comandos da ablação estao em
+[`C6R_WEBSIRENE_SUPERVISAO_AUXILIAR.md`](C6R_WEBSIRENE_SUPERVISAO_AUXILIAR.md).

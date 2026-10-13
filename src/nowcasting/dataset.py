@@ -52,6 +52,7 @@ class RadarStationMemmapDataset(Dataset):
         t_out: int = 5,
         stride: int = 5,
         target_source: str = "alertario",
+        auxiliary_target_source: str | None = None,
         split_name: str = "dataset",
         crop_stations: bool = False,
         crop_margin_pixels: int = 20,
@@ -68,6 +69,9 @@ class RadarStationMemmapDataset(Dataset):
         self.t_out = t_out
         self.stride = stride
         self.target_source = target_source.lower()
+        self.auxiliary_target_source = (
+            auxiliary_target_source.lower() if auxiliary_target_source else None
+        )
         self.split_name = split_name
         self.crop_stations = crop_stations
         self.crop_margin_pixels = crop_margin_pixels
@@ -90,6 +94,13 @@ class RadarStationMemmapDataset(Dataset):
                 f"Fonte inválida: {target_source}. "
                 f"Opções: {sorted(TARGET_METADATA_FILES)}"
             )
+        if self.auxiliary_target_source not in (None, *TARGET_METADATA_FILES):
+            raise ValueError(
+                f"Fonte auxiliar inválida: {auxiliary_target_source}. "
+                f"Opções: {sorted(TARGET_METADATA_FILES)}"
+            )
+        if self.auxiliary_target_source == self.target_source:
+            raise ValueError("A fonte auxiliar deve ser diferente da fonte principal.")
         if not self.years:
             raise ValueError("O split não contém anos.")
         if min(t_in, t_out, stride) <= 0:
@@ -166,8 +177,12 @@ class RadarStationMemmapDataset(Dataset):
         year_dir = self.radar_root / f"year={year}"
         metadata_path = year_dir / "metadata.json"
         target_metadata_path = year_dir / TARGET_METADATA_FILES[self.target_source]
+        auxiliary_metadata_path = (
+            year_dir / TARGET_METADATA_FILES[self.auxiliary_target_source]
+            if self.auxiliary_target_source else None
+        )
         required = (metadata_path, year_dir / "radar_frames.dat", target_metadata_path)
-        missing = [str(path) for path in required if not path.is_file()]
+        missing = [str(path) for path in (*required, auxiliary_metadata_path) if path and not path.is_file()]
         if missing:
             raise FileNotFoundError(
                 f"{self.split_name}: arquivos ausentes para {year}: {', '.join(missing)}"
@@ -177,6 +192,10 @@ class RadarStationMemmapDataset(Dataset):
             radar_metadata = json.load(file)
         with target_metadata_path.open(encoding="utf-8") as file:
             target_metadata = json.load(file)
+        auxiliary_metadata = None
+        if auxiliary_metadata_path:
+            with auxiliary_metadata_path.open(encoding="utf-8") as file:
+                auxiliary_metadata = json.load(file)
 
         capture_preprocessing = radar_metadata.get("capture_preprocessing")
         if self.capture_preprocessing is None:
@@ -194,6 +213,14 @@ class RadarStationMemmapDataset(Dataset):
             raise ValueError(
                 f"{year}: radar {radar_shape} e target {target_shape} não estão alinhados."
             )
+        if auxiliary_metadata is not None:
+            auxiliary_shape = tuple(auxiliary_metadata["shape"])
+            if len(auxiliary_shape) != 4 or auxiliary_shape[-1] != 1:
+                raise ValueError(f"{year}: shape de target auxiliar inválido: {auxiliary_shape}")
+            if radar_shape[:3] != auxiliary_shape[:3]:
+                raise ValueError(
+                    f"{year}: radar {radar_shape} e target auxiliar {auxiliary_shape} não estão alinhados."
+                )
         self._configure_station_crop(radar_shape[1], radar_shape[2])
 
         frames = np.memmap(
@@ -238,23 +265,14 @@ class RadarStationMemmapDataset(Dataset):
                     "goes": np.memmap(goes_dir / goes_metadata.get("frames_file", "goes_frames.dat"), dtype=np.dtype(goes_metadata.get("dtype", "float32")), mode="r", shape=goes_shape),
                     "goes_normalization": goes_metadata.get("normalization", {}),
                 })
-        if target_metadata.get("format") == "sparse":
-            sparse_path = year_dir / target_metadata["sparse_file"]
-            if not sparse_path.is_file():
-                raise FileNotFoundError(f"{year}: target esparso ausente: {sparse_path}")
-            with np.load(sparse_path) as sparse:
-                target = {name: np.asarray(sparse[name]) for name in ("frame", "row", "column", "value")}
-            if not (len(target["frame"]) == len(target["row"]) == len(target["column"]) == len(target["value"])):
-                raise ValueError(f"{year}: arrays esparsos com comprimentos diferentes.")
-            if len(target["frame"]) and (target["frame"].min() < 0 or target["frame"].max() >= radar_shape[0]
-                                       or target["row"].min() < 0 or target["row"].max() >= radar_shape[1]
-                                       or target["column"].min() < 0 or target["column"].max() >= radar_shape[2]):
-                raise ValueError(f"{year}: indices esparsos fora da grade.")
-            self.year_data[year] = {"frames": frames, "sparse": target, **goes_data}
-        else:
-            targets = np.memmap(year_dir / target_metadata["Y_file"], dtype=np.dtype(target_metadata["Y_dtype"]), mode="r", shape=target_shape)
-            masks = np.memmap(year_dir / target_metadata["M_file"], dtype=np.dtype(target_metadata["M_dtype"]), mode="r", shape=target_shape)
-            self.year_data[year] = {"frames": frames, "targets": targets, "masks": masks, **goes_data}
+        target = self._load_target(year, year_dir, target_metadata, radar_shape)
+        auxiliary_target = (
+            self._load_target(year, year_dir, auxiliary_metadata, radar_shape, label="auxiliar")
+            if auxiliary_metadata is not None else None
+        )
+        self.year_data[year] = {
+            "frames": frames, "target": target, "auxiliary_target": auxiliary_target, **goes_data,
+        }
 
         n_possible = len(frames) - (self.t_in + self.t_out) + 1
         if n_possible <= 0:
@@ -294,6 +312,7 @@ class RadarStationMemmapDataset(Dataset):
         self.samples.extend((year, start) for start in candidate_starts)
         print(
             f"[{self.split_name}] Ano {year} carregado | fonte={self.target_source} | "
+            f"auxiliar={self.auxiliary_target_source or 'nenhuma'} | "
             f"frames={len(frames)} | shape={radar_shape} | "
             f"amostras={len(candidate_starts)}",
             flush=True,
@@ -302,12 +321,34 @@ class RadarStationMemmapDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
+    def _load_target(
+        self, year: int, year_dir: Path, metadata: dict, radar_shape: tuple[int, ...], *, label: str = "",
+    ) -> dict[str, np.ndarray | np.memmap | bool]:
+        if metadata.get("format") == "sparse":
+            sparse_path = year_dir / metadata["sparse_file"]
+            if not sparse_path.is_file():
+                raise FileNotFoundError(f"{year}: target esparso {label} ausente: {sparse_path}")
+            with np.load(sparse_path) as sparse:
+                target = {name: np.asarray(sparse[name]) for name in ("frame", "row", "column", "value")}
+            if not (len(target["frame"]) == len(target["row"]) == len(target["column"]) == len(target["value"])):
+                raise ValueError(f"{year}: arrays esparsos {label} com comprimentos diferentes.")
+            if len(target["frame"]) and (target["frame"].min() < 0 or target["frame"].max() >= radar_shape[0]
+                                       or target["row"].min() < 0 or target["row"].max() >= radar_shape[1]
+                                       or target["column"].min() < 0 or target["column"].max() >= radar_shape[2]):
+                raise ValueError(f"{year}: índices esparsos {label} fora da grade.")
+            return {"sparse": target}
+        shape = tuple(metadata["shape"])
+        return {
+            "targets": np.memmap(year_dir / metadata["Y_file"], dtype=np.dtype(metadata["Y_dtype"]), mode="r", shape=shape),
+            "masks": np.memmap(year_dir / metadata["M_file"], dtype=np.dtype(metadata["M_dtype"]), mode="r", shape=shape),
+        }
+
     def _sparse_targets_to_dense(
-        self, data: dict[str, np.memmap | dict[str, np.ndarray]], start: int, end: int,
+        self, target: dict[str, np.ndarray | np.memmap | dict[str, np.ndarray]], start: int, end: int,
         height: int, width: int,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Materialize only one temporal sparse-target slice for a sample."""
-        sparse = data["sparse"]
+        sparse = target["sparse"]
         left = np.searchsorted(sparse["frame"], start, side="left")
         right = np.searchsorted(sparse["frame"], end, side="left")
         frames = sparse["frame"][left:right] - start
@@ -329,6 +370,18 @@ class RadarStationMemmapDataset(Dataset):
         masks[frames, rows, columns, 0] = 1.0
         return targets, masks
 
+    def _targets_for_window(
+        self, target: dict[str, np.ndarray | np.memmap | dict[str, np.ndarray]], start: int, end: int,
+        height: int, width: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if "sparse" in target:
+            return self._sparse_targets_to_dense(target, start, end, height, width)
+        row_slice, column_slice = self._crop_slices()
+        return (
+            np.array(target["targets"][start:end, row_slice, column_slice], dtype=np.float32),
+            np.array(target["masks"][start:end, row_slice, column_slice], dtype=np.float32),
+        )
+
     def __getitem__(self, index: int):
         year, start = self.samples[index]
         data = self.year_data[year]
@@ -347,29 +400,25 @@ class RadarStationMemmapDataset(Dataset):
             elif normalization.get("kind") not in (None, "none"):
                 raise ValueError(f"Normalização GOES não suportada: {normalization.get('kind')!r}")
             x = np.concatenate((x, np.nan_to_num(goes, nan=0.0)), axis=-1)
-        if "sparse" in data:
-            y, m = self._sparse_targets_to_dense(data, x_end, y_end, x.shape[1], x.shape[2])
-            if self.input_stations:
-                station_values, station_masks = self._sparse_targets_to_dense(
-                    data, start, x_end, x.shape[1], x.shape[2]
-                )
-        else:
-            y = np.array(data["targets"][x_end:y_end, row_slice, column_slice], dtype=np.float32)
-            m = np.array(data["masks"][x_end:y_end, row_slice, column_slice], dtype=np.float32)
-            if self.input_stations:
-                station_values = np.array(
-                    data["targets"][start:x_end, row_slice, column_slice], dtype=np.float32
-                )
-                station_masks = np.array(
-                    data["masks"][start:x_end, row_slice, column_slice], dtype=np.float32
-                )
+        y, m = self._targets_for_window(data["target"], x_end, y_end, x.shape[1], x.shape[2])
+        if self.input_stations:
+            station_values, station_masks = self._targets_for_window(
+                data["target"], start, x_end, x.shape[1], x.shape[2]
+            )
         if self.input_stations:
             x = np.concatenate((x, station_values, station_masks), axis=-1)
-        return (
+        sample = (
             torch.from_numpy(x).permute(3, 0, 1, 2),
             torch.from_numpy(y).permute(3, 0, 1, 2),
             torch.from_numpy(m).permute(3, 0, 1, 2),
         )
+        if data["auxiliary_target"] is None:
+            return sample
+        auxiliary_y, auxiliary_m = self._targets_for_window(
+            data["auxiliary_target"], x_end, y_end, x.shape[1], x.shape[2]
+        )
+        return (*sample, torch.from_numpy(auxiliary_y).permute(3, 0, 1, 2),
+                torch.from_numpy(auxiliary_m).permute(3, 0, 1, 2))
 
     def local_rgb_echo_fraction(
         self, sample_index: int, station_pixels: np.ndarray, *, radius: int = 2,
@@ -414,8 +463,9 @@ class RadarStationMemmapDataset(Dataset):
             for index, (year, start) in enumerate(self.samples):
                 data = self.year_data[year]
                 y_start = start + self.t_in
-                if "sparse" in data:
-                    sparse = data["sparse"]
+                target_data = data["target"]
+                if "sparse" in target_data:
+                    sparse = target_data["sparse"]
                     left = np.searchsorted(sparse["frame"], y_start, side="left")
                     right = np.searchsorted(sparse["frame"], y_start + self.t_out, side="left")
                     values = sparse["value"][left:right]
@@ -427,8 +477,8 @@ class RadarStationMemmapDataset(Dataset):
                     maximum = np.expm1(values).max() if len(values) else None
                 else:
                     row_slice, column_slice = self._crop_slices()
-                    target = np.array(data["targets"][y_start:y_start + self.t_out, row_slice, column_slice])
-                    mask = np.array(data["masks"][y_start:y_start + self.t_out, row_slice, column_slice]) > 0
+                    target = np.array(target_data["targets"][y_start:y_start + self.t_out, row_slice, column_slice])
+                    mask = np.array(target_data["masks"][y_start:y_start + self.t_out, row_slice, column_slice]) > 0
                     maximum = np.expm1(target[mask]).max() if mask.any() else None
                 if maximum is not None:
                     classes[index] = np.searchsorted(thresholds, maximum, side="right")

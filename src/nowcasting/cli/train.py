@@ -53,6 +53,7 @@ CHECKPOINT_VERSION = 1
 RESUME_CONFIG_KEYS = (
     "dataset_root", "model", "num_layers", "hidden_dim", "kernel_size", "step", "stride",
     "target_source", "loss", "huber_delta", "loss_weights", "sampler_thresholds",
+    "auxiliary_target_source", "auxiliary_loss_weight",
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
@@ -153,6 +154,14 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--test-years", required=True)
     parser.add_argument("--target-source", choices=("alertario", "websirene"),
                         default="alertario")
+    parser.add_argument(
+        "--auxiliary-target-source", choices=("alertario", "websirene"),
+        help="Fonte usada somente como supervisão auxiliar durante o treino.",
+    )
+    parser.add_argument(
+        "--auxiliary-loss-weight", type=float, default=1.0,
+        help="Peso da loss mascarada da fonte auxiliar durante o treino.",
+    )
     parser.add_argument("--model", choices=("stconvs2s-c", "stconvs2s-r"),
                         default="stconvs2s-c")
     parser.add_argument("--epochs", type=int, default=80)
@@ -340,6 +349,19 @@ def criterion_from_args(args: argparse.Namespace, weights: tuple[float, ...]):
     return WeightedMaskedHuberLoss(args.huber_delta, weights)
 
 
+def supervised_training_loss(
+    criterion, prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor,
+    auxiliary_target: torch.Tensor | None = None, auxiliary_mask: torch.Tensor | None = None,
+    auxiliary_weight: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Compute independently normalized primary and optional auxiliary losses."""
+    primary_loss = criterion(prediction, target, mask)
+    if auxiliary_target is None or auxiliary_mask is None:
+        return primary_loss, primary_loss, None
+    auxiliary_loss = criterion(prediction, auxiliary_target, auxiliary_mask)
+    return primary_loss + auxiliary_weight * auxiliary_loss, primary_loss, auxiliary_loss
+
+
 def empty_stats(horizons: int, station_locations: list[tuple[int, int, int]] | None = None,
                 residual_persistence: bool = False) -> dict:
     stats = {
@@ -493,7 +515,7 @@ def evaluate(model, loader, criterion, device, collect_metrics: bool = False,
     total_loss = 0.0
     stats = None
     with torch.no_grad():
-        for inputs, target, mask in loader:
+        for inputs, target, mask, *_ in loader:
             inputs = inputs.to(device, non_blocking=loader.pin_memory)
             target = target.to(device, non_blocking=loader.pin_memory)
             mask = mask.to(device, non_blocking=loader.pin_memory)
@@ -535,7 +557,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     val_loader = DataLoader(val_dataset, shuffle=False, sampler=DistributedSampler(val_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
     test_loader = DataLoader(test_dataset, shuffle=False, sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
 
-    sample_x, sample_y, _ = train_dataset[0]
+    sample_x, sample_y, *_ = train_dataset[0]
     model = build_forecaster(
         model_type, sample_x, sample_y, num_layers=args.num_layers, hidden_dim=args.hidden_dim,
         kernel_size=args.kernel_size, device=device, step=args.step,
@@ -592,13 +614,16 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
             sampler.set_epoch(epoch)
         model.train()
         losses = []
+        primary_losses = []
+        auxiliary_losses = []
         epoch_started = time.monotonic()
         total_batches = len(train_loader)
         data_wait_seconds = 0.0
         train_iterator = iter(train_loader)
         for batch_index in range(1, total_batches + 1):
             data_started = time.monotonic()
-            inputs, target, mask = next(train_iterator)
+            batch = next(train_iterator)
+            inputs, target, mask, *auxiliary = batch
             data_wait_seconds += time.monotonic() - data_started
             if (batch_index - 1) % args.gradient_accumulation_steps == 0:
                 optimizer.zero_grad()
@@ -609,11 +634,23 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
             inputs = inputs.to(device, non_blocking=args.pin_memory)
             target = target.to(device, non_blocking=args.pin_memory)
             mask = mask.to(device, non_blocking=args.pin_memory)
-            loss = criterion(model(inputs), target, mask)
+            output = model(inputs)
+            auxiliary_target = auxiliary_mask = None
+            if auxiliary:
+                auxiliary_target, auxiliary_mask = auxiliary
+                auxiliary_target = auxiliary_target.to(device, non_blocking=args.pin_memory)
+                auxiliary_mask = auxiliary_mask.to(device, non_blocking=args.pin_memory)
+            loss, primary_loss, auxiliary_loss = supervised_training_loss(
+                criterion, output, target, mask, auxiliary_target, auxiliary_mask,
+                args.auxiliary_loss_weight,
+            )
+            if auxiliary_loss is not None:
+                auxiliary_losses.append(auxiliary_loss.item())
             (loss / group_size).backward()
             if batch_index % args.gradient_accumulation_steps == 0 or batch_index == total_batches:
                 optimizer.step()
             losses.append(loss.item())
+            primary_losses.append(primary_loss.item())
             if args.log_interval and (batch_index % args.log_interval == 0 or batch_index == total_batches):
                 elapsed = time.monotonic() - epoch_started
                 rate = batch_index / elapsed if elapsed else 0.0
@@ -648,6 +685,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         history.append({
             "epoch": epoch,
             "train_loss": train_loss,
+            "train_primary_loss": float(np.mean(primary_losses)),
+            "train_auxiliary_loss": float(np.mean(auxiliary_losses)) if auxiliary_losses else None,
             "val_loss": val_loss,
             "data_wait_seconds": data_wait_seconds,
             "compute_seconds": compute_seconds,
@@ -663,8 +702,11 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                 f"no improvement | best={best_val:.6f} at epoch {best_epoch} | "
                 f"patience={stalled}/{args.patience}"
             )
+        loss_details = f"loss={train_loss:.6f} | primary={np.mean(primary_losses):.6f}"
+        if auxiliary_losses:
+            loss_details += f" | auxiliary={np.mean(auxiliary_losses):.6f}"
         if is_main(rank): print(f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
-              f"loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
+              f"{loss_details} | val_loss={val_loss:.6f} | "
               f"{stopping_status} | data_wait={data_wait_seconds:.1f}s | "
               f"compute={compute_seconds:.1f}s", flush=True)
         rng_states = collect_rng_states(capture_rng_state())
@@ -722,7 +764,7 @@ def main() -> None:
             or args.gradient_accumulation_steps <= 0 or args.log_interval < 0
             or args.prefetch_factor <= 0 or args.checkpoint_every <= 0
             or args.crop_margin_pixels < 0 or args.mapping_height_orig <= 0 or args.mapping_width_orig <= 0
-            or (args.stride is not None and args.stride <= 0)):
+            or args.auxiliary_loss_weight < 0 or (args.stride is not None and args.stride <= 0)):
         raise ValueError("Parâmetros de treino e dimensões do mapeamento devem ser positivos; workers, log-interval e crop-margin-pixels não podem ser negativos.")
     if args.persistent_workers and not args.workers:
         raise ValueError("--persistent-workers requer --workers maior que zero.")
@@ -732,6 +774,10 @@ def main() -> None:
         raise ValueError("--forecast-formulation conditional-late-fusion requer --input-goes.")
     if args.conditional_goes_control and args.forecast_formulation != "conditional-late-fusion":
         raise ValueError("--conditional-goes-control requer --forecast-formulation conditional-late-fusion.")
+    if args.auxiliary_target_source and args.target_source != "alertario":
+        raise ValueError("A supervisão auxiliar atual requer --target-source alertario como referência primária.")
+    if args.auxiliary_target_source == args.target_source:
+        raise ValueError("--auxiliary-target-source deve diferir de --target-source.")
 
     rank, world_size, device = distributed_context(args.distributed)
     if args.pin_memory is None:
@@ -742,6 +788,8 @@ def main() -> None:
         "test_years": test_years, "stconvs2s_commit": core_commit(args.stconvs2s_root),
     }
     configuration = {key: str(value) if isinstance(value, Path) else value for key, value in configuration.items()}
+    if not args.auxiliary_target_source:
+        configuration["auxiliary_loss_weight"] = None
     configuration["world_size"] = world_size
     resume_state = None
     if args.resume:
@@ -768,6 +816,7 @@ def main() -> None:
     datasets = (
         RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="train",
+                                  auxiliary_target_source=args.auxiliary_target_source,
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
