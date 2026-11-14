@@ -45,7 +45,8 @@ done
 Use 2012--2021 para treino, 2022 para validacao e 2023--2024 somente para o
 teste final. Primeiro, execute o controle C3R na mesma configuracao. Depois,
 para a seed 1000, compare pesos `0.25`, `0.5` e `1.0` unicamente por
-`best_val_loss` de 2022. Nao consulte 2023--2024 para escolher o peso.
+`best_val_loss` de 2022. Use `--skip-test`: ele impede que o runner carregue
+ou avalie 2023--2024 durante a selecao do peso.
 
 ```bash
 mapping=configs/mapeamento_pixel_estacao_alertario_historical_v1.csv
@@ -69,11 +70,13 @@ common=(
 
 PYTHONPATH=src python -u -m nowcasting.cli.train \
   "${common[@]}" \
+  --skip-test \
   --run-name C6R-alertario-control-seed-1000
 
 for weight in 0.25 0.5 1.0; do
   PYTHONPATH=src python -u -m nowcasting.cli.train \
     "${common[@]}" \
+    --skip-test \
     --auxiliary-target-source websirene \
     --auxiliary-loss-weight "$weight" \
     --run-name "C6R-websirene-aux-w${weight}-seed-1000"
@@ -84,8 +87,9 @@ O historico de cada run registra `train_primary_loss` e
 `train_auxiliary_loss`. `val_loss` continua sendo apenas a loss mascarada do
 AlertaRio.
 
-Depois de fixar o peso em 2022, repita controle e candidata com as seeds 1000,
-1001 e 1002. Exporte as previsoes e aplique o mesmo avaliador pareado usado
+Depois de fixar o peso em 2022, reavalie o checkpoint selecionado da seed 1000
+em 2023--2024 somente uma vez. Em seguida, repita controle e candidata com as
+seeds 1001 e 1002 e exporte as previsoes para o mesmo avaliador pareado usado
 nos experimentos C3R, sempre contra os targets AlertaRio de 2023--2024.
 
 ## Interpretacao

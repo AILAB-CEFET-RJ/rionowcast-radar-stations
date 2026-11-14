@@ -54,6 +54,7 @@ RESUME_CONFIG_KEYS = (
     "dataset_root", "model", "num_layers", "hidden_dim", "kernel_size", "step", "stride",
     "target_source", "loss", "huber_delta", "loss_weights", "sampler_thresholds",
     "auxiliary_target_source", "auxiliary_loss_weight",
+    "skip_test",
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
@@ -152,6 +153,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--train-years", required=True)
     parser.add_argument("--val-years", required=True)
     parser.add_argument("--test-years", required=True)
+    parser.add_argument(
+        "--skip-test", action="store_true",
+        help="Treina e seleciona checkpoint sem carregar nem avaliar os anos de teste.",
+    )
     parser.add_argument("--target-source", choices=("alertario", "websirene"),
                         default="alertario")
     parser.add_argument(
@@ -555,7 +560,14 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     loader_args = loader_options(args)
     train_loader = DataLoader(train_dataset, shuffle=sampler is None, sampler=sampler, **loader_args)
     val_loader = DataLoader(val_dataset, shuffle=False, sampler=DistributedSampler(val_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
-    test_loader = DataLoader(test_dataset, shuffle=False, sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset, shuffle=False,
+            sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False)
+            if args.distributed else None,
+            **loader_args,
+        )
 
     sample_x, sample_y, *_ = train_dataset[0]
     model = build_forecaster(
@@ -736,10 +748,12 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if args.distributed: dist.barrier()
     state = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
     (model.module if args.distributed else model).load_state_dict(state["model_state_dict"])
-    locations = station_locations(test_dataset, args)
-    _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
-                          station_locations=locations,
-                          residual_persistence=uses_persistence_baseline(args.forecast_formulation))
+    metrics = None
+    if test_loader is not None:
+        locations = station_locations(test_dataset, args)
+        _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
+                              station_locations=locations,
+                              residual_persistence=uses_persistence_baseline(args.forecast_formulation))
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
@@ -747,7 +761,10 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if is_main(rank):
         with (run_dir / f"iteration_{iteration + 1}.json").open("w", encoding="utf-8") as file:
             json.dump(result, file, indent=2)
-        print(f"Iteration {iteration + 1} complete | test={metrics['global']}", flush=True)
+        if metrics is None:
+            print(f"Iteration {iteration + 1} complete | test=skipped", flush=True)
+        else:
+            print(f"Iteration {iteration + 1} complete | test={metrics['global']}", flush=True)
     return result
 
 
@@ -813,8 +830,7 @@ def main() -> None:
             run_dir.mkdir(parents=True, exist_ok=False)
     if args.distributed:
         dist.barrier()
-    datasets = (
-        RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
+    train_dataset = RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="train",
                                   auxiliary_target_source=args.auxiliary_target_source,
                                   crop_stations=args.crop_stations,
@@ -824,8 +840,8 @@ def main() -> None:
                                   require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
-                                  mapping_width_orig=args.mapping_width_orig),
-        RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.stride or args.step,
+                                  mapping_width_orig=args.mapping_width_orig)
+    val_dataset = RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="val",
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
@@ -834,8 +850,9 @@ def main() -> None:
                                   require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
-                                  mapping_width_orig=args.mapping_width_orig),
-        RadarStationMemmapDataset(args.dataset_root, test_years, stride=args.stride or args.step,
+                                  mapping_width_orig=args.mapping_width_orig)
+    test_dataset = None if args.skip_test else RadarStationMemmapDataset(
+                                  args.dataset_root, test_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="test",
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
@@ -844,14 +861,15 @@ def main() -> None:
                                   require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
-                                  mapping_width_orig=args.mapping_width_orig),
-    )
-    crop_metadata = datasets[0].crop_metadata
-    if any(dataset.crop_metadata != crop_metadata for dataset in datasets[1:]):
+                                  mapping_width_orig=args.mapping_width_orig)
+    datasets = (train_dataset, val_dataset, test_dataset)
+    loaded_datasets = (train_dataset, val_dataset) if test_dataset is None else datasets
+    crop_metadata = train_dataset.crop_metadata
+    if any(dataset.crop_metadata != crop_metadata for dataset in loaded_datasets[1:]):
         raise ValueError("O crop calculado difere entre os splits.")
     configuration["crop"] = crop_metadata
-    configuration["radar_capture_preprocessing"] = datasets[0].capture_preprocessing
-    configuration["goes_preprocessing"] = datasets[0].goes_preprocessing
+    configuration["radar_capture_preprocessing"] = train_dataset.capture_preprocessing
+    configuration["goes_preprocessing"] = train_dataset.goes_preprocessing
     if resume_state is not None:
         validate_resume_checkpoint(resume_state, configuration, world_size)
     if is_main(rank) and resume_state is None:
