@@ -69,6 +69,22 @@ def create_sparse_year(root: Path, year: int) -> None:
         )
 
 
+def create_auxiliary_sparse_target(root: Path, year: int) -> None:
+    year_dir = root / f"year={year}"
+    np.savez(
+        year_dir / "targets_websirene_sparse.npz",
+        frame=np.array([5, 6], dtype=np.int32),
+        row=np.array([1, 0], dtype=np.uint16),
+        column=np.array([0, 1], dtype=np.uint16),
+        value=np.array([np.log1p(3.0), np.log1p(4.0)], dtype=np.float32),
+    )
+    with (year_dir / "targets_websirene_metadata.json").open("w", encoding="utf-8") as file:
+        json.dump(
+            {"shape": [12, 2, 2, 1], "format": "sparse", "sparse_file": "targets_websirene_sparse.npz"},
+            file,
+        )
+
+
 def create_goes_year(root: Path, year: int, available: list[bool] | None = None) -> None:
     year_dir = root / f"year={year}"
     radar_timestamps = np.array(
@@ -170,6 +186,25 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertAlmostEqual(y[0, 0, 0, 0].item(), np.log1p(2.0))
             self.assertEqual(int(mask.sum()), 2)
 
+    def test_auxiliary_sparse_targets_are_returned_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            create_auxiliary_sparse_target(root, 2020)
+
+            dataset = RadarStationMemmapDataset(
+                root, [2020], stride=5, target_source="alertario",
+                auxiliary_target_source="websirene",
+            )
+            sample = dataset[0]
+
+            self.assertEqual(len(sample), 5)
+            _, primary, primary_mask, auxiliary, auxiliary_mask = sample
+            self.assertEqual(int(primary_mask.sum()), 2)
+            self.assertEqual(int(auxiliary_mask.sum()), 2)
+            self.assertAlmostEqual(primary[0, 0, 0, 0].item(), np.log1p(2.0))
+            self.assertAlmostEqual(auxiliary[0, 0, 1, 0].item(), np.log1p(3.0))
+
     def test_goes_adds_channels_and_filters_incomplete_input_history(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -194,6 +229,18 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertEqual(control.samples, with_goes.samples)
             x, _, _ = control[0]
             self.assertEqual(tuple(x.shape), (3, 2, 2, 2))
+
+    def test_local_rgb_echo_fraction_uses_last_input_frame_and_station_neighborhood(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            year_dir = root / "year=2020"
+            radar = np.memmap(year_dir / "radar_frames.dat", dtype=np.uint8, mode="r+", shape=(12, 2, 2, 3))
+            radar[4, 0, 0, 0] = 255  # Last input frame for the only stride-five sample.
+            radar.flush()
+            dataset = RadarStationMemmapDataset(root, [2020], stride=5)
+            echo = dataset.local_rgb_echo_fraction(0, np.array([[0, 0], [1, 1]]), radius=0)
+            self.assertEqual(echo.tolist(), [1.0, 0.0])
 
     def test_station_sequence_dataset_and_model_use_values_and_masks(self):
         with tempfile.TemporaryDirectory() as temporary_dir:

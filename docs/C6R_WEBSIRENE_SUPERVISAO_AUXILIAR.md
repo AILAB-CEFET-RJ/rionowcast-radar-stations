@@ -1,0 +1,144 @@
+# C6R: Supervisao Auxiliar WebSirene
+
+## Objetivo
+
+Avaliar se os pluviometros WebSirene auditados melhoram o treinamento do
+STConvS2S sem substituir o AlertaRio como referencia experimental. O modelo
+recebe as mesmas entradas do C3R: cinco frames RGB de radar e cinco valores
+passados com mascaras das estacoes AlertaRio. O WebSirene entra somente na
+funcao de perda durante o treino.
+
+Para cada batch de treino, a otimizacao e:
+
+```text
+loss total = loss mascarada AlertaRio + peso WebSirene * loss mascarada WebSirene
+```
+
+Cada termo e normalizado pela soma de sua propria mascara. Assim, a maior
+quantidade de leituras WebSirene nao aumenta implicitamente sua contribuicao.
+Quando as duas redes observam uma mesma celula e instante, ambas contribuem
+com seu proprio erro; os valores nao sao combinados em um target unico.
+
+Validacao, early stopping, selecao de peso e teste usam exclusivamente o
+AlertaRio. Portanto, a comparacao permanece diretamente comparavel aos
+experimentos C3R.
+
+## Pre-requisitos
+
+- Branch `feature/websirene-auxiliary-supervision`.
+- Targets AlertaRio e WebSirene presentes para todos os anos usados.
+- Targets WebSirene gerados da whitelist auditada V1, com offset temporal zero
+  e agregacao `median` quando houver mais de uma estacao por celula.
+
+```bash
+dataset=data/datasets/radar_sumare_2012_2024_15min_128_audited_v3
+
+for year in $(seq 2012 2024); do
+  test -f "$dataset/year=$year/targets_alertario_sparse.npz" &&
+  test -f "$dataset/year=$year/targets_websirene_sparse.npz" &&
+  echo "$year: OK" || echo "$year: AUSENTE"
+done
+```
+
+## Controle Pareado e Busca de Peso
+
+Use 2012--2021 para treino, 2022 para validacao e 2023--2024 somente para o
+teste final. Primeiro, execute o controle C3R na mesma configuracao. Depois,
+para a seed 1000, compare pesos `0.25`, `0.5` e `1.0` unicamente por
+`best_val_loss` de 2022. Use `--skip-test`: ele impede que o runner carregue
+ou avalie 2023--2024 durante a selecao do peso.
+
+```bash
+mapping=configs/mapeamento_pixel_estacao_alertario_historical_v1.csv
+
+common=(
+  --dataset-root "$dataset"
+  --train-years 2012-2021 --val-years 2022 --test-years 2023-2024
+  --target-source alertario
+  --crop-stations --crop-margin-pixels 20
+  --station-mapping "$mapping" --mapping-height-orig 654 --mapping-width-orig 656
+  --input-stations
+  --forecast-formulation residual-persistence
+  --model stconvs2s-c
+  --batch-size 2 --epochs 30 --patience 10
+  --step 5 --stride 5
+  --workers 2 --persistent-workers
+  --log-interval 250 --loss masked-huber
+  --cuda 0 --checkpoint-every 1
+  --seed 1000
+)
+
+PYTHONPATH=src python -u -m nowcasting.cli.train \
+  "${common[@]}" \
+  --skip-test \
+  --run-name C6R-alertario-control-seed-1000
+
+for weight in 0.25 0.5 1.0; do
+  PYTHONPATH=src python -u -m nowcasting.cli.train \
+    "${common[@]}" \
+    --skip-test \
+    --auxiliary-target-source websirene \
+    --auxiliary-loss-weight "$weight" \
+    --run-name "C6R-websirene-aux-w${weight}-seed-1000"
+done
+```
+
+O historico de cada run registra `train_primary_loss` e
+`train_auxiliary_loss`. `val_loss` continua sendo apenas a loss mascarada do
+AlertaRio.
+
+Depois de fixar o peso em 2022, reavalie o checkpoint selecionado da seed 1000
+em 2023--2024 somente uma vez. Em seguida, repita controle e candidata com as
+seeds 1001 e 1002 e exporte as previsoes para o mesmo avaliador pareado usado
+nos experimentos C3R, sempre contra os targets AlertaRio de 2023--2024.
+
+## Resultado da Selecao Inicial
+
+A selecao foi executada na seed 1000, com treino em 2012--2021 e validacao em
+2022. Todos os runs usaram `--skip-test`; portanto, os dados de 2023--2024 nao
+foram carregados nem consultados nesta decisao.
+
+| Configuracao | Peso WebSirene | Melhor epoca | `best_val_loss` |
+|---|---:|---:|---:|
+| Controle AlertaRio | -- | 20 | 0,002947 |
+| C6R auxiliar | 0,25 | 20 | 0,002969 |
+| C6R auxiliar | 0,50 | 10 | 0,002956 |
+| C6R auxiliar | 1,00 | 10 | 0,002967 |
+
+O melhor candidato auxiliar (peso 0,50) foi pior que o controle em 0,000009
+de `best_val_loss` (aproximadamente 0,3%). Apesar de pequeno, o efeito nao e
+favoravel em nenhuma das tres ponderacoes avaliadas. Assim, esta formulacao de
+supervisao auxiliar WebSirene e registrada como uma ablação negativa: nao
+executar seeds adicionais nem avaliar checkpoints em 2023--2024. O WebSirene
+permanece como fonte auditada para investigacoes futuras, mas nao integra o
+modelo de referencia atual.
+
+## Hipoteses Futuras
+
+O resultado negativo nao demonstra que o WebSirene seja inutil. Ele rejeita
+somente a loss auxiliar global, com peso fixo e normalizacao independente das
+mascaras. Possiveis formulacoes futuras, cada uma exigindo uma nova selecao
+cronologica sem consultar o teste, sao:
+
+- ponderar a loss WebSirene por distancia ate as estacoes AlertaRio ou pela
+  concordancia historica entre as redes, em vez de atribuir o mesmo peso a toda
+  celula WebSirene;
+- restringir a supervisao auxiliar a observacoes ou eventos que atendam um
+  criterio de confiabilidade previamente declarado, em especial eventos de
+  chuva de interesse operacional;
+- realizar pre-treinamento espacial com AlertaRio e WebSirene, seguido de
+  ajuste fino e selecao exclusivamente com AlertaRio;
+- investigar uma cabeca auxiliar separada para WebSirene, compartilhando o
+  encoder de radar, mas sem impor que a mesma cabeca de previsao explique as
+  duas redes.
+
+Essas alternativas nao devem ser comparadas retrospectivamente em 2023--2024.
+Devem ser definidas e selecionadas em uma validacao cronologica futura, de
+preferencia apos a versao auditada que incorporar 2025--2026.
+
+## Interpretacao
+
+Aceite o WebSirene apenas se o ganho for reproduzivel entre seeds e sustentado
+por metricas de alerta, horizonte e intensidade no teste cronologico. Uma
+reducao isolada de MAE global nao basta, pois a maior parte das observacoes e
+seca ou fraca.

@@ -20,6 +20,7 @@ def normalize_configuration(configuration: dict) -> dict:
     normalized = dict(configuration)
     normalized.setdefault("input_goes", False)
     normalized.setdefault("require_goes_availability", False)
+    normalized.setdefault("conditional_goes_control", False)
     required = ("dataset_root", "test_years", "step", "stride", "model", "num_layers", "hidden_dim",
                 "kernel_size", "stconvs2s_root", "target_source", "station_mapping", "mapping_height_orig",
                 "mapping_width_orig", "crop_stations", "crop_margin_pixels", "input_stations")
@@ -104,6 +105,8 @@ def main() -> None:
         device=device, step=int(configuration["step"]),
         forecast_formulation=configuration.get("forecast_formulation", "direct"),
         input_stations=bool(configuration["input_stations"]),
+        input_goes=bool(configuration["input_goes"]),
+        conditional_goes_control=bool(configuration["conditional_goes_control"]),
     ).to(device)
     state = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(state["model_state_dict"])

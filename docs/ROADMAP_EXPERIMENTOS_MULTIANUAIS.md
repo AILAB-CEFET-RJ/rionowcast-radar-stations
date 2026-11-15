@@ -64,10 +64,25 @@ disco sem alterar a arquitetura STConvS2S.
   fonte bruta.
 - [x] Implementar comparação temporal opcional entre WebSirene auditado e
   AlertaRio próximo.
-- [ ] Executar a auditoria V1 sobre os Parquets reais, revisar os eventos
-  suspeitos e validar a whitelist.
-- [ ] Gerar targets WebSirene somente a partir da whitelist auditada e executar
-  um smoke test antes de adicioná-los a qualquer experimento comparativo.
+- [x] Executar a auditoria V1 sobre os Parquets reais: 83 estações, 80 aprovadas
+  preliminarmente e 27.710.098 observações aceitas em 2012--2024.
+- [x] Comparar WebSirene e AlertaRio próximo em offsets temporais candidatos;
+  offset zero foi o melhor também sob chuva (MAE ponderado de 1,94 mm/15 min e
+  correlação mediana de 0,478), sustentando a convenção temporal `m15` atual.
+- [x] Gerar targets WebSirene esparsos somente a partir da whitelist auditada,
+  com agregação `median` das estações que compartilham uma célula de 128 x 128,
+  e executar smoke test ponta a ponta do loader em 2012--2024.
+- [x] Implementar supervisão auxiliar WebSirene no treino, mantendo AlertaRio
+  como target primário de validação e teste e normalizando cada loss por sua
+  própria máscara.
+- [x] Selecionar o peso da loss WebSirene exclusivamente em 2022, sem consultar
+  2023--2024: `0,25`, `0,50` e `1,00` foram todos piores que o controle
+  AlertaRio na seed 1000. Registrar C6R como ablação negativa e não executar
+  seeds adicionais ou avaliação no teste para esta formulação.
+- [ ] Após definir o novo protocolo cronológico com 2025--2026, avaliar novas
+  hipóteses WebSirene sem reutilizar o teste histórico: ponderação por
+  distância ou concordância com AlertaRio, filtragem por confiabilidade/evento,
+  pré-treinamento seguido de ajuste fino AlertaRio e cabeça auxiliar separada.
 
 O protocolo, limiares iniciais e comandos estão documentados em
 [`CONTROLE_QUALIDADE_WEBSIRENE.md`](CONTROLE_QUALIDADE_WEBSIRENE.md). A rede
@@ -84,8 +99,10 @@ pendentes acima.
   `causality_errors=0`.
 - [x] Processar e auditar C13 em 2022 (99,57\%), 2023 (99,69\%) e 2024
   (99,21\%), todos sem erro causal.
-- [ ] Processar e auditar C13 em 2018--2021.
-- [ ] Comparar C3 restrito (2018--2024) com radar + estações lagadas + ABI.
+- [x] Processar e auditar C13 em 2018--2021, completando a cobertura experimental de 2018--2024.
+- [x] Executar ablação C4R de concatenação precoce de C13 contra controle com a mesma disponibilidade causal; o ganho não foi reproduzível entre três seeds.
+- [x] Executar C5R com ramos RGB e C13 separados, fusão tardia condicionada ao eco RGB e controle pareado de capacidade com C13 zerado; o ganho não foi reproduzível entre três seeds.
+- [x] Reportar C5R separado entre eco RGB local fraco ($\leq 0{,}05$) e eco presente, além das métricas globais e de alerta; a estratificação e os alertas não sustentaram o uso de C13 no modelo atual.
 - [ ] Integrar GLM somente após estabelecer o ganho marginal dos canais ABI.
 - [ ] Criar contrato GOES-19 para o bucket `noaa-goes19`, preservando a seleção
   causal por término de cena e registrando satélite, configuração e grade nos

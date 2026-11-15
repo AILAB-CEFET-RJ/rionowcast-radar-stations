@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from nowcasting.residual_persistence import (
+    ConditionalLateFusionForecaster,
     ResidualPersistenceForecaster,
     build_forecaster,
     persistence_from_station_channels,
@@ -35,6 +36,25 @@ class ZeroCore(nn.Module):
             (inputs.shape[0], self.output_channels, self.horizons, *inputs.shape[-2:]),
             dtype=inputs.dtype, device=inputs.device,
         )
+
+
+class ConstantCore(ZeroCore):
+    def __init__(self, output_channels: int, horizons: int, value: float):
+        super().__init__(output_channels, horizons)
+        self.value = value
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        self.last_input_channels = inputs.shape[1]
+        return torch.full(
+            (inputs.shape[0], self.output_channels, self.horizons, *inputs.shape[-2:]), self.value,
+            dtype=inputs.dtype, device=inputs.device,
+        )
+
+
+class FirstInputCore(ZeroCore):
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        self.last_input_channels = inputs.shape[1]
+        return inputs[:, :1, :1].expand(-1, self.output_channels, self.horizons, -1, -1)
 
 
 class ResidualPersistenceTests(unittest.TestCase):
@@ -72,6 +92,44 @@ class ResidualPersistenceTests(unittest.TestCase):
                 hidden_dim=1, kernel_size=1, device=torch.device("cpu"), step=2,
                 forecast_formulation="residual-persistence", input_stations=False,
             )
+
+    def test_conditional_late_fusion_gates_c13_more_without_rgb_echo(self):
+        radar_core = ZeroCore(1, 2)
+        goes_core = ConstantCore(1, 2, 1.0)
+        model = ConditionalLateFusionForecaster(
+            radar_core, goes_core, radar_channels=3, goes_channels=1, horizons=2,
+        )
+        inputs = torch.zeros((1, 6, 3, 1, 2))
+        inputs[0, 0, -1, 0, 1] = 1.0  # Echo only at the second spatial pixel.
+        gate = model.goes_gate(inputs[:, :3])
+        output = model(inputs)
+        self.assertGreater(gate[0, 0, 0, 0, 0].item(), gate[0, 0, 0, 0, 1].item())
+        self.assertEqual(radar_core.last_input_channels, 3)
+        self.assertEqual(goes_core.last_input_channels, 1)
+        self.assertGreater(output[0, 0, 0, 0, 0].item(), output[0, 0, 0, 0, 1].item())
+
+    def test_builder_rejects_conditional_fusion_without_goes(self):
+        sample_x = torch.zeros((5, 2, 2, 2))
+        sample_y = torch.zeros((1, 2, 2, 2))
+        with self.assertRaisesRegex(ValueError, "input-goes"):
+            build_forecaster(
+                lambda *_args, **_kwargs: ZeroCore(1, 2), sample_x, sample_y, num_layers=1,
+                hidden_dim=1, kernel_size=1, device=torch.device("cpu"), step=2,
+                forecast_formulation="conditional-late-fusion", input_stations=True, input_goes=False,
+            )
+
+    def test_conditional_capacity_control_zeros_c13_values_but_keeps_the_branch(self):
+        inputs = torch.zeros((1, 6, 2, 1, 1))
+        inputs[:, 3] = 2.0
+        with_c13 = ConditionalLateFusionForecaster(
+            ZeroCore(1, 2), FirstInputCore(1, 2), radar_channels=3, goes_channels=1, horizons=2,
+        )
+        control = ConditionalLateFusionForecaster(
+            ZeroCore(1, 2), FirstInputCore(1, 2), radar_channels=3, goes_channels=1, horizons=2,
+            goes_branch_control=True,
+        )
+        self.assertGreater(with_c13(inputs).abs().max().item(), 0.0)
+        self.assertEqual(control(inputs).abs().max().item(), 0.0)
 
     def test_history_diagnostic_counts_each_valid_target_horizon(self):
         stats = empty_stats(horizons=2, residual_persistence=True)

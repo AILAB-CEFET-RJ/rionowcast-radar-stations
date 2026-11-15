@@ -1,295 +1,186 @@
-from pathlib import Path
+#!/usr/bin/env python3
+"""Build sparse, QC-approved WebSirene targets on the radar grid."""
+from __future__ import annotations
+
 import argparse
+import hashlib
 import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
+from nowcasting.station_geometry import direct_resampled_pixels
 
-MAX_M15 = 50.0
 
-
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Gera Y_all e M_all das estações WebSirene em memmap, alinhados aos timestamps do radar."
+        description="Gera targets WebSirene esparsos, auditados e alinhados ao radar."
     )
-
-    source_group = parser.add_mutually_exclusive_group(required=True)
-    source_group.add_argument(
-        "--ws-root",
-        type=Path,
-        help="Raiz bruta WebSirene. Mantem o corte legado de 50 mm/15min.",
-    )
-    source_group.add_argument(
-        "--qc-root",
-        type=Path,
-        help="Raiz auditada pelo nowcasting-audit-websirene; usa apenas qc_status=accepted.",
-    )
+    parser.add_argument("--qc-root", type=Path, required=True,
+                        help="Raiz produzida por nowcasting-audit-websirene.")
+    parser.add_argument("--station-whitelist", type=Path, required=True,
+                        help="CSV de estações aprovadas na auditoria.")
     parser.add_argument("--mapping", type=Path, required=True)
-    parser.add_argument(
-        "--station-whitelist",
-        type=Path,
-        help="CSV da auditoria com a coluna station_id; aplica somente a esta fonte.",
-    )
-    parser.add_argument("--radar-root", type=Path, required=True)
-
+    parser.add_argument("--radar-root", type=Path, required=True,
+                        help="Dataset auditável contendo year=<ano>/radar_timestamps.npy.")
     parser.add_argument("--year-start", type=int, required=True)
     parser.add_argument("--year-end", type=int, required=True)
-
-    parser.add_argument("--station-start", type=int, default=1)
-    parser.add_argument("--station-end", type=int, default=83)
-
-    parser.add_argument("--height", type=int, default=256)
-    parser.add_argument("--width", type=int, default=256)
-
+    parser.add_argument("--height", type=int, default=128)
+    parser.add_argument("--width", type=int, default=128)
     parser.add_argument("--height-orig", type=int, default=656)
     parser.add_argument("--width-orig", type=int, default=654)
-
+    parser.add_argument(
+        "--observation-to-radar-offset-minutes", type=int, required=True,
+        help=("Offset que converte timestamp_15min WebSirene ao início UTC da janela de radar. "
+              "Deve ser escolhido pela auditoria temporal entre redes."),
+    )
+    parser.add_argument("--cell-aggregation", choices=("median", "mean", "max"), default="median",
+                        help="Agregação para múltiplas estações na mesma célula/instante.")
+    parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
-def normalize_ts(ts):
-    ts = pd.Timestamp(ts)
-
-    if ts.tzinfo is None:
-        return ts.tz_localize("UTC")
-
-    return ts.tz_convert("UTC")
+def normalize_timestamp(value: object) -> pd.Timestamp:
+    if isinstance(value, np.generic):
+        value = value.item()
+    timestamp = pd.Timestamp(value)
+    return timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
 
 
-def process_year(args, year):
-    print("\n" + "=" * 60, flush=True)
-    print(f"GERANDO Y/M MEMMAP PARA {year}", flush=True)
-    print("=" * 60, flush=True)
+def load_mapping(args: argparse.Namespace) -> pd.DataFrame:
+    mapping = pd.read_csv(args.mapping)
+    required = {"station_id", "pixel_i", "pixel_j"}
+    missing = required - set(mapping.columns)
+    if missing:
+        raise ValueError(f"{args.mapping}: colunas ausentes: {sorted(missing)}")
+    mapping = mapping.dropna(subset=required).copy()
+    mapping["station_id"] = pd.to_numeric(mapping["station_id"], errors="raise").astype(int)
+    if mapping["station_id"].duplicated().any():
+        raise ValueError(f"{args.mapping}: station_id duplicado.")
+    rows, columns = direct_resampled_pixels(
+        mapping["pixel_i"].to_numpy(float), mapping["pixel_j"].to_numpy(float),
+        height_orig=args.height_orig, width_orig=args.width_orig,
+        height=args.height, width=args.width,
+    )
+    mapping["row"] = rows
+    mapping["column"] = columns
+    return mapping[["station_id", "row", "column"]]
 
+
+def load_observations(
+    qc_root: Path, station_ids: set[int], year: int, mapping: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    frames = []
+    stats = {"files_found": 0, "rows_read": 0, "rows_accepted": 0, "stations_without_mapping": 0}
+    for station_id in sorted(station_ids):
+        path = qc_root / f"station_id={station_id}" / f"year={year}" / "data.parquet"
+        if not path.is_file():
+            continue
+        stats["files_found"] += 1
+        frame = pd.read_parquet(path, columns=["station_id", "timestamp_15min", "m15", "qc_status"])
+        stats["rows_read"] += len(frame)
+        frame = frame.loc[frame["qc_status"] == "accepted", ["station_id", "timestamp_15min", "m15"]].copy()
+        stats["rows_accepted"] += len(frame)
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=["station_id", "timestamp", "m15", "row", "column"]), stats
+
+    observations = pd.concat(frames, ignore_index=True)
+    observations["station_id"] = pd.to_numeric(observations["station_id"], errors="raise").astype(int)
+    observations["timestamp"] = pd.to_datetime(observations.pop("timestamp_15min"), utc=True, errors="coerce")
+    observations["m15"] = pd.to_numeric(observations["m15"], errors="coerce")
+    observations = observations.dropna(subset=["timestamp", "m15"])
+    # A série bruta tem leituras de cinco minutos; para uma mesma estação/janela,
+    # preservamos o maior acumulado m15 antes de agregar espacialmente.
+    observations = observations.groupby(["station_id", "timestamp"], as_index=False)["m15"].max()
+    before_mapping = len(observations)
+    observations = observations.merge(mapping, on="station_id", how="inner", validate="many_to_one")
+    stats["stations_without_mapping"] = before_mapping - len(observations)
+    return observations, stats
+
+
+def aggregate_cells(observations: pd.DataFrame, aggregation: str) -> pd.DataFrame:
+    if observations.empty:
+        return pd.DataFrame(columns=["frame", "row", "column", "station_id", "station_count", "m15"])
+    grouped = observations.groupby(["frame", "row", "column"], as_index=False)
+    values = grouped["m15"].agg(aggregation).rename(columns={"m15": "m15"})
+    provenance = grouped["station_id"].agg(
+        station_count="nunique",
+        station_id=lambda ids: int(ids.iloc[0]) if ids.nunique() == 1 else -1,
+    ).reset_index()
+    return values.merge(provenance, on=["frame", "row", "column"], validate="one_to_one")
+
+
+def process_year(args: argparse.Namespace, year: int, mapping: pd.DataFrame, station_ids: set[int]) -> None:
     year_dir = args.radar_root / f"year={year}"
-    radar_ts_path = year_dir / "radar_timestamps.npy"
+    timestamps_path = year_dir / "radar_timestamps.npy"
+    if not timestamps_path.is_file():
+        raise FileNotFoundError(f"{timestamps_path} ausente.")
+    sparse_path = year_dir / "targets_websirene_sparse.npz"
+    metadata_path = year_dir / "targets_websirene_metadata.json"
+    if (sparse_path.exists() or metadata_path.exists()) and not args.overwrite:
+        raise FileExistsError(f"{year_dir} já possui targets WebSirene; use --overwrite.")
 
-    if not radar_ts_path.exists():
-        print(f"[{year}] radar_timestamps.npy não encontrado. Pulando ano.", flush=True)
-        return
+    timestamps = [normalize_timestamp(value) for value in np.load(timestamps_path, allow_pickle=False)]
+    timestamp_index = {timestamp: index for index, timestamp in enumerate(timestamps)}
+    observations, stats = load_observations(args.qc_root, station_ids, year, mapping)
+    offset = pd.Timedelta(minutes=args.observation_to_radar_offset_minutes)
+    observations["radar_timestamp"] = observations["timestamp"] + offset
+    observations["frame"] = observations["radar_timestamp"].map(timestamp_index)
+    stats["timestamp_absent"] = int(observations["frame"].isna().sum())
+    observations = observations.dropna(subset=["frame"]).copy()
+    observations["frame"] = observations["frame"].astype(np.int32)
+    cells = aggregate_cells(observations, args.cell_aggregation).sort_values(["frame", "row", "column"])
 
-    radar_timestamps = np.load(radar_ts_path, allow_pickle=True)
-    radar_timestamps = [normalize_ts(ts) for ts in radar_timestamps]
-
-    timestamp_to_idx = {ts: idx for idx, ts in enumerate(radar_timestamps)}
-
-    print(f"[{year}] Timestamps do radar: {len(radar_timestamps)}", flush=True)
-
-    mapping_df = pd.read_csv(args.mapping)
-
-    all_rain = []
-    removed_qc = 0
-
-    for station_id in range(args.station_start, args.station_end + 1):
-        if args.station_whitelist_ids is not None and station_id not in args.station_whitelist_ids:
-            continue
-        path = (
-            (args.qc_root or args.ws_root)
-            / f"station_id={station_id}"
-            / f"year={year}"
-            / "data.parquet"
-        )
-
-        if not path.exists():
-            continue
-
-        df = pd.read_parquet(path)
-
-        required_columns = ["nome", "latitude", "longitude", "observation_datetime", "m15"]
-        missing_columns = set(required_columns) - set(df.columns)
-        if missing_columns:
-            raise ValueError(f"{path}: colunas ausentes: {sorted(missing_columns)}")
-        if args.qc_root:
-            if "qc_status" not in df:
-                raise ValueError(f"{path}: esperado qc_status em fonte auditada.")
-            df = df.loc[df["qc_status"] == "accepted"].copy()
-            if "station_id" not in df:
-                df["station_id"] = station_id
-        else:
-            df = df.rename(columns={"id": "station_id"})
-            if "station_id" not in df:
-                df["station_id"] = station_id
-
-        df = df[["station_id", *required_columns]].copy()
-
-        df["observation_datetime"] = pd.to_datetime(
-            df["observation_datetime"],
-            utc=True,
-        )
-
-        df = df.dropna(subset=["m15"])
-
-        before_qc = len(df)
-        if args.qc_root is None:
-            df = df[(df["m15"] >= 0) & (df["m15"] <= MAX_M15)]
-            removed_qc += before_qc - len(df)
-
-        df["observation_datetime"] = (
-            df["observation_datetime"]
-            .dt.floor("15min")
-        )
-
-        if len(df) > 0:
-            all_rain.append(df)
-
-    if not all_rain:
-        print(f"[{year}] Nenhum dado WebSirene encontrado.", flush=True)
-        return
-
-    rain_df = pd.concat(all_rain, ignore_index=True)
-
-    rain_df = rain_df.groupby(
-        [
-            "station_id",
-            "nome",
-            "latitude",
-            "longitude",
-            "observation_datetime",
-        ],
-        as_index=False,
-    )["m15"].max()
-
-    rain_df = rain_df.merge(
-        mapping_df[["station_id", "pixel_i", "pixel_j"]],
-        on="station_id",
-        how="inner",
+    np.savez_compressed(
+        sparse_path,
+        frame=cells["frame"].to_numpy(np.int32),
+        row=cells["row"].to_numpy(np.uint16),
+        column=cells["column"].to_numpy(np.uint16),
+        station_id=cells["station_id"].to_numpy(np.int32),
+        station_count=cells["station_count"].to_numpy(np.uint16),
+        value=np.log1p(cells["m15"].to_numpy(np.float32)).astype(np.float32),
     )
-
-    rain_df["pixel_i_256"] = (
-        rain_df["pixel_i"] * args.height / args.height_orig
-    ).round().astype(int)
-
-    rain_df["pixel_j_256"] = (
-        rain_df["pixel_j"] * args.width / args.width_orig
-    ).round().astype(int)
-
-    rain_df["pixel_i_256"] = rain_df["pixel_i_256"].clip(0, args.height - 1)
-    rain_df["pixel_j_256"] = rain_df["pixel_j_256"].clip(0, args.width - 1)
-
-    y_path = year_dir / "Y_all.dat"
-    m_path = year_dir / "M_all.dat"
-    metadata_path = year_dir / "targets_metadata.json"
-
-    shape_y = (len(radar_timestamps), args.height, args.width, 1)
-
-    Y_all = np.memmap(
-        y_path,
-        dtype=np.float32,
-        mode="w+",
-        shape=shape_y,
-    )
-
-    M_all = np.memmap(
-        m_path,
-        dtype=np.uint8,
-        mode="w+",
-        shape=shape_y,
-    )
-
-    Y_all[:] = 0.0
-    M_all[:] = 0
-
-    used_rows = 0
-    skipped_rows = 0
-
-    for _, row in rain_df.iterrows():
-        ts = normalize_ts(row["observation_datetime"])
-
-        if ts not in timestamp_to_idx:
-            skipped_rows += 1
-            continue
-
-        t_idx = timestamp_to_idx[ts]
-
-        i = int(row["pixel_i_256"])
-        j = int(row["pixel_j_256"])
-
-        rain = float(row["m15"])
-
-        # transformação logarítmica
-        rain = np.log1p(rain)
-
-        Y_all[t_idx, i, j, 0] = max(Y_all[t_idx, i, j, 0], rain)
-        M_all[t_idx, i, j, 0] = 1
-
-        used_rows += 1
-
-    Y_all.flush()
-    M_all.flush()
-
     metadata = {
-        "year": year,
-        "target": "m15",
-        "target_unit": "log1p(mm/15min)",
-        "target_transform": "log1p",
-        "original_target_unit": "mm/15min",
-        "height": args.height,
-        "width": args.width,
-        "channels": 1,
-        "temporal_resolution_minutes": 15,
-        "shape": list(shape_y),
-        "Y_file": "Y_all.dat",
-        "M_file": "M_all.dat",
-        "Y_dtype": "float32",
-        "M_dtype": "uint8",
-        "mask": "1 where station observation exists",
-        "quality_control": (
-            "accepted observations from WebSirene QC" if args.qc_root else "removed values above 50 mm/15min"
-        ),
-        "qc_source_root": str(args.qc_root) if args.qc_root else None,
-        "max_m15_allowed": None if args.qc_root else MAX_M15,
-        "removed_qc_rows": int(removed_qc),
-        "used_rows": int(used_rows),
-        "skipped_rows_timestamp_absent": int(skipped_rows),
+        "source": "websirene", "year": year, "target": "m15",
+        "target_unit": "log1p(mm/15min)", "target_transform": "log1p",
+        "original_target_unit": "mm/15min", "height": args.height, "width": args.width,
+        "channels": 1, "temporal_resolution_minutes": 15,
+        "observation_timestamp_to_radar_offset_minutes": args.observation_to_radar_offset_minutes,
+        "shape": [len(timestamps), args.height, args.width, 1], "format": "sparse",
+        "sparse_file": sparse_path.name,
+        "sparse_fields": {"frame": "int32", "row": "uint16", "column": "uint16",
+                          "station_id": "int32 (-1 when a cell aggregates stations)",
+                          "station_count": "uint16", "value": "float32"},
+        "observation_count": int(len(cells)), "source_station_observation_count": int(len(observations)),
+        "station_provenance": True, "mapping_file": str(args.mapping),
+        "mapping_sha256": hashlib.sha256(args.mapping.read_bytes()).hexdigest(),
+        "qc_root": str(args.qc_root), "station_whitelist": str(args.station_whitelist),
+        "cell_aggregation": args.cell_aggregation,
+        "quality_control": "only qc_status=accepted from whitelisted stations", "quality_control_counts": stats,
     }
-
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=4)
-
-    print(f"[{year}] Arquivos salvos:", flush=True)
-    print(f"  {y_path}", flush=True)
-    print(f"  {m_path}", flush=True)
-    print(f"  {metadata_path}", flush=True)
-    print(f"[{year}] Shape Y/M: {shape_y}", flush=True)
-    print(f"[{year}] Observações: {int(M_all.sum())}", flush=True)
-    print(f"[{year}] Linhas usadas: {used_rows}", flush=True)
-    print(f"[{year}] Linhas ignoradas por timestamp ausente: {skipped_rows}", flush=True)
-    if args.qc_root is None:
-        print(f"[{year}] Linhas removidas QC (>50 mm/15min): {removed_qc}", flush=True)
-    print(f"[{year}] Máximo salvo em log1p: {float(Y_all.max()):.4f}", flush=True)
-    print(f"[{year}] Equivalente em mm/15min: {float(np.expm1(Y_all.max())):.2f}", flush=True)
-
-    del Y_all
-    del M_all
+    metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"[{year}] source_observations={len(observations)} cells={len(cells)} output={year_dir}", flush=True)
 
 
-def main():
+def main() -> None:
     args = parse_args()
-    if args.station_whitelist and args.qc_root is None:
-        raise ValueError("--station-whitelist requer --qc-root.")
-    if args.station_whitelist:
-        whitelist = pd.read_csv(args.station_whitelist)
-        if "station_id" not in whitelist:
-            raise ValueError("--station-whitelist precisa conter a coluna station_id.")
-        args.station_whitelist_ids = set(pd.to_numeric(whitelist["station_id"], errors="raise").astype(int))
-    else:
-        args.station_whitelist_ids = None
-
-    print("=== CONFIGURAÇÃO ===", flush=True)
-    print("ws_root:", args.ws_root, flush=True)
-    print("qc_root:", args.qc_root, flush=True)
-    print("mapping:", args.mapping, flush=True)
-    print("station_whitelist:", args.station_whitelist, flush=True)
-    print("radar_root:", args.radar_root, flush=True)
-    print("year_start:", args.year_start, flush=True)
-    print("year_end:", args.year_end, flush=True)
-    print("resize:", (args.height, args.width), flush=True)
-    print("MAX_M15:", MAX_M15, flush=True)
-
+    if args.year_end < args.year_start:
+        raise ValueError("--year-end deve ser maior ou igual a --year-start.")
+    if not args.station_whitelist.is_file():
+        raise FileNotFoundError(f"Whitelist ausente: {args.station_whitelist}")
+    whitelist = pd.read_csv(args.station_whitelist)
+    if "station_id" not in whitelist:
+        raise ValueError("--station-whitelist requer a coluna station_id.")
+    station_ids = set(pd.to_numeric(whitelist["station_id"], errors="raise").astype(int))
+    mapping = load_mapping(args)
+    missing_mapping = station_ids - set(mapping["station_id"])
+    if missing_mapping:
+        raise ValueError(f"Whitelist contém estações ausentes no mapeamento: {sorted(missing_mapping)}")
     for year in range(args.year_start, args.year_end + 1):
-        process_year(args, year)
-
-    print("\nTODOS OS ANOS FINALIZADOS.", flush=True)
+        process_year(args, year, mapping, station_ids)
 
 
 if __name__ == "__main__":

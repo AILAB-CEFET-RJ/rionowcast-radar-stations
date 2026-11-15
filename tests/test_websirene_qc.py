@@ -97,6 +97,13 @@ class WebSireneQualityControlTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["mae"], 1.0)
         self.assertAlmostEqual(metrics["bias"], 0.0)
 
+        wet_metrics = paired_metrics(
+            pd.DataFrame({"websirene_m15": [0.0, 3.0], "reference_m15": [0.0, 2.0]}),
+            wet_threshold_mm15=1.25,
+        )
+        self.assertEqual(wet_metrics["wet_union_n"], 1)
+        self.assertAlmostEqual(wet_metrics["wet_union_mae"], 1.0)
+
     def test_sparse_target_transform_can_differ_from_direct_transform(self) -> None:
         rows = pd.Series([303.0, 342.0]).to_numpy()
         columns = pd.Series([324.0, 335.0]).to_numpy()

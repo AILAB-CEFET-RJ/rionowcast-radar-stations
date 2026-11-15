@@ -35,7 +35,7 @@ from nowcasting.losses import (
     WeightedMaskedMAELoss,
 )
 from nowcasting.station_dataset import load_station_pixels
-from nowcasting.residual_persistence import build_forecaster
+from nowcasting.residual_persistence import build_forecaster, uses_persistence_baseline
 from nowcasting.paths import project_root
 
 
@@ -53,10 +53,12 @@ CHECKPOINT_VERSION = 1
 RESUME_CONFIG_KEYS = (
     "dataset_root", "model", "num_layers", "hidden_dim", "kernel_size", "step", "stride",
     "target_source", "loss", "huber_delta", "loss_weights", "sampler_thresholds",
+    "auxiliary_target_source", "auxiliary_loss_weight",
+    "skip_test",
     "balanced_sampler", "batch_size", "gradient_accumulation_steps", "learning_rate",
     "seed", "distributed", "world_size", "train_years", "val_years", "test_years",
     "stconvs2s_commit", "crop_stations", "crop_margin_pixels", "station_mapping",
-    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "require_goes_availability", "forecast_formulation", "crop",
+    "mapping_height_orig", "mapping_width_orig", "input_stations", "input_goes", "require_goes_availability", "forecast_formulation", "conditional_goes_control", "crop",
     "radar_capture_preprocessing", "goes_preprocessing",
 )
 
@@ -133,8 +135,13 @@ def parse_arguments() -> argparse.Namespace:
         help="Filtra sequências por disponibilidade causal de GOES sem acrescentar GOES à entrada; use no controle pareado.",
     )
     parser.add_argument(
-        "--forecast-formulation", choices=("direct", "residual-persistence"), default="direct",
-        help="direct prevê chuva diretamente; residual-persistence soma correção do radar à persistência causal B1.",
+        "--forecast-formulation", choices=("direct", "residual-persistence", "conditional-late-fusion"), default="direct",
+        help=("direct prevê chuva diretamente; residual-persistence soma correção à persistência causal B1; "
+              "conditional-late-fusion usa ramos RGB e GOES separados, com porta C13 condicionada ao eco RGB."),
+    )
+    parser.add_argument(
+        "--conditional-goes-control", action="store_true",
+        help="No modo conditional-late-fusion, zera C13 antes do ramo GOES para criar controle pareado de capacidade.",
     )
     parser.add_argument(
         "--station-mapping", type=Path,
@@ -146,8 +153,20 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--train-years", required=True)
     parser.add_argument("--val-years", required=True)
     parser.add_argument("--test-years", required=True)
+    parser.add_argument(
+        "--skip-test", action="store_true",
+        help="Treina e seleciona checkpoint sem carregar nem avaliar os anos de teste.",
+    )
     parser.add_argument("--target-source", choices=("alertario", "websirene"),
                         default="alertario")
+    parser.add_argument(
+        "--auxiliary-target-source", choices=("alertario", "websirene"),
+        help="Fonte usada somente como supervisão auxiliar durante o treino.",
+    )
+    parser.add_argument(
+        "--auxiliary-loss-weight", type=float, default=1.0,
+        help="Peso da loss mascarada da fonte auxiliar durante o treino.",
+    )
     parser.add_argument("--model", choices=("stconvs2s-c", "stconvs2s-r"),
                         default="stconvs2s-c")
     parser.add_argument("--epochs", type=int, default=80)
@@ -335,6 +354,19 @@ def criterion_from_args(args: argparse.Namespace, weights: tuple[float, ...]):
     return WeightedMaskedHuberLoss(args.huber_delta, weights)
 
 
+def supervised_training_loss(
+    criterion, prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor,
+    auxiliary_target: torch.Tensor | None = None, auxiliary_mask: torch.Tensor | None = None,
+    auxiliary_weight: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Compute independently normalized primary and optional auxiliary losses."""
+    primary_loss = criterion(prediction, target, mask)
+    if auxiliary_target is None or auxiliary_mask is None:
+        return primary_loss, primary_loss, None
+    auxiliary_loss = criterion(prediction, auxiliary_target, auxiliary_mask)
+    return primary_loss + auxiliary_weight * auxiliary_loss, primary_loss, auxiliary_loss
+
+
 def empty_stats(horizons: int, station_locations: list[tuple[int, int, int]] | None = None,
                 residual_persistence: bool = False) -> dict:
     stats = {
@@ -488,7 +520,7 @@ def evaluate(model, loader, criterion, device, collect_metrics: bool = False,
     total_loss = 0.0
     stats = None
     with torch.no_grad():
-        for inputs, target, mask in loader:
+        for inputs, target, mask, *_ in loader:
             inputs = inputs.to(device, non_blocking=loader.pin_memory)
             target = target.to(device, non_blocking=loader.pin_memory)
             mask = mask.to(device, non_blocking=loader.pin_memory)
@@ -528,13 +560,22 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     loader_args = loader_options(args)
     train_loader = DataLoader(train_dataset, shuffle=sampler is None, sampler=sampler, **loader_args)
     val_loader = DataLoader(val_dataset, shuffle=False, sampler=DistributedSampler(val_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
-    test_loader = DataLoader(test_dataset, shuffle=False, sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False) if args.distributed else None, **loader_args)
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset, shuffle=False,
+            sampler=DistributedSampler(test_dataset, world_size, rank, shuffle=False)
+            if args.distributed else None,
+            **loader_args,
+        )
 
-    sample_x, sample_y, _ = train_dataset[0]
+    sample_x, sample_y, *_ = train_dataset[0]
     model = build_forecaster(
         model_type, sample_x, sample_y, num_layers=args.num_layers, hidden_dim=args.hidden_dim,
         kernel_size=args.kernel_size, device=device, step=args.step,
         forecast_formulation=args.forecast_formulation, input_stations=args.input_stations,
+        input_goes=args.input_goes,
+        conditional_goes_control=args.conditional_goes_control,
     ).to(device)
     if args.distributed:
         model = DistributedDataParallel(model, device_ids=[device.index])
@@ -546,7 +587,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         f"effective_batch={args.batch_size * args.gradient_accumulation_steps * world_size}\n"
         f"Input channels | radar=3 | goes={sample_x.shape[0] - 3 - (2 if args.input_stations else 0)} | stations={2 if args.input_stations else 0} | "
         f"total={sample_x.shape[0]} | formulation={args.forecast_formulation} | "
-        f"STConvS2S channels={sample_x.shape[0] - (2 if args.forecast_formulation == 'residual-persistence' else 0)}\n"
+        f"STConvS2S channels={'radar=3, goes=' + str(sample_x.shape[0] - 5) if args.forecast_formulation == 'conditional-late-fusion' else sample_x.shape[0] - (2 if uses_persistence_baseline(args.forecast_formulation) else 0)}\n"
         f"DataLoader | workers={args.workers} | pin_memory={args.pin_memory} | "
         f"persistent_workers={args.persistent_workers} | "
         f"prefetch_factor={args.prefetch_factor if args.workers else 'n/a'}",
@@ -585,13 +626,16 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
             sampler.set_epoch(epoch)
         model.train()
         losses = []
+        primary_losses = []
+        auxiliary_losses = []
         epoch_started = time.monotonic()
         total_batches = len(train_loader)
         data_wait_seconds = 0.0
         train_iterator = iter(train_loader)
         for batch_index in range(1, total_batches + 1):
             data_started = time.monotonic()
-            inputs, target, mask = next(train_iterator)
+            batch = next(train_iterator)
+            inputs, target, mask, *auxiliary = batch
             data_wait_seconds += time.monotonic() - data_started
             if (batch_index - 1) % args.gradient_accumulation_steps == 0:
                 optimizer.zero_grad()
@@ -602,11 +646,23 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
             inputs = inputs.to(device, non_blocking=args.pin_memory)
             target = target.to(device, non_blocking=args.pin_memory)
             mask = mask.to(device, non_blocking=args.pin_memory)
-            loss = criterion(model(inputs), target, mask)
+            output = model(inputs)
+            auxiliary_target = auxiliary_mask = None
+            if auxiliary:
+                auxiliary_target, auxiliary_mask = auxiliary
+                auxiliary_target = auxiliary_target.to(device, non_blocking=args.pin_memory)
+                auxiliary_mask = auxiliary_mask.to(device, non_blocking=args.pin_memory)
+            loss, primary_loss, auxiliary_loss = supervised_training_loss(
+                criterion, output, target, mask, auxiliary_target, auxiliary_mask,
+                args.auxiliary_loss_weight,
+            )
+            if auxiliary_loss is not None:
+                auxiliary_losses.append(auxiliary_loss.item())
             (loss / group_size).backward()
             if batch_index % args.gradient_accumulation_steps == 0 or batch_index == total_batches:
                 optimizer.step()
             losses.append(loss.item())
+            primary_losses.append(primary_loss.item())
             if args.log_interval and (batch_index % args.log_interval == 0 or batch_index == total_batches):
                 elapsed = time.monotonic() - epoch_started
                 rate = batch_index / elapsed if elapsed else 0.0
@@ -641,6 +697,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         history.append({
             "epoch": epoch,
             "train_loss": train_loss,
+            "train_primary_loss": float(np.mean(primary_losses)),
+            "train_auxiliary_loss": float(np.mean(auxiliary_losses)) if auxiliary_losses else None,
             "val_loss": val_loss,
             "data_wait_seconds": data_wait_seconds,
             "compute_seconds": compute_seconds,
@@ -656,8 +714,11 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                 f"no improvement | best={best_val:.6f} at epoch {best_epoch} | "
                 f"patience={stalled}/{args.patience}"
             )
+        loss_details = f"loss={train_loss:.6f} | primary={np.mean(primary_losses):.6f}"
+        if auxiliary_losses:
+            loss_details += f" | auxiliary={np.mean(auxiliary_losses):.6f}"
         if is_main(rank): print(f"Iteration {iteration + 1} | epoch {epoch}/{args.epochs} | "
-              f"loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
+              f"{loss_details} | val_loss={val_loss:.6f} | "
               f"{stopping_status} | data_wait={data_wait_seconds:.1f}s | "
               f"compute={compute_seconds:.1f}s", flush=True)
         rng_states = collect_rng_states(capture_rng_state())
@@ -687,10 +748,12 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if args.distributed: dist.barrier()
     state = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
     (model.module if args.distributed else model).load_state_dict(state["model_state_dict"])
-    locations = station_locations(test_dataset, args)
-    _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
-                          station_locations=locations,
-                          residual_persistence=args.forecast_formulation == "residual-persistence")
+    metrics = None
+    if test_loader is not None:
+        locations = station_locations(test_dataset, args)
+        _, metrics = evaluate(model, test_loader, criterion, device, collect_metrics=True,
+                              station_locations=locations,
+                              residual_persistence=uses_persistence_baseline(args.forecast_formulation))
     elapsed = time.monotonic() - started
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
@@ -698,7 +761,10 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
     if is_main(rank):
         with (run_dir / f"iteration_{iteration + 1}.json").open("w", encoding="utf-8") as file:
             json.dump(result, file, indent=2)
-        print(f"Iteration {iteration + 1} complete | test={metrics['global']}", flush=True)
+        if metrics is None:
+            print(f"Iteration {iteration + 1} complete | test=skipped", flush=True)
+        else:
+            print(f"Iteration {iteration + 1} complete | test={metrics['global']}", flush=True)
     return result
 
 
@@ -715,12 +781,20 @@ def main() -> None:
             or args.gradient_accumulation_steps <= 0 or args.log_interval < 0
             or args.prefetch_factor <= 0 or args.checkpoint_every <= 0
             or args.crop_margin_pixels < 0 or args.mapping_height_orig <= 0 or args.mapping_width_orig <= 0
-            or (args.stride is not None and args.stride <= 0)):
+            or args.auxiliary_loss_weight < 0 or (args.stride is not None and args.stride <= 0)):
         raise ValueError("Parâmetros de treino e dimensões do mapeamento devem ser positivos; workers, log-interval e crop-margin-pixels não podem ser negativos.")
     if args.persistent_workers and not args.workers:
         raise ValueError("--persistent-workers requer --workers maior que zero.")
-    if args.forecast_formulation == "residual-persistence" and not args.input_stations:
-        raise ValueError("--forecast-formulation residual-persistence requer --input-stations.")
+    if uses_persistence_baseline(args.forecast_formulation) and not args.input_stations:
+        raise ValueError(f"--forecast-formulation {args.forecast_formulation} requer --input-stations.")
+    if args.forecast_formulation == "conditional-late-fusion" and not args.input_goes:
+        raise ValueError("--forecast-formulation conditional-late-fusion requer --input-goes.")
+    if args.conditional_goes_control and args.forecast_formulation != "conditional-late-fusion":
+        raise ValueError("--conditional-goes-control requer --forecast-formulation conditional-late-fusion.")
+    if args.auxiliary_target_source and args.target_source != "alertario":
+        raise ValueError("A supervisão auxiliar atual requer --target-source alertario como referência primária.")
+    if args.auxiliary_target_source == args.target_source:
+        raise ValueError("--auxiliary-target-source deve diferir de --target-source.")
 
     rank, world_size, device = distributed_context(args.distributed)
     if args.pin_memory is None:
@@ -731,6 +805,8 @@ def main() -> None:
         "test_years": test_years, "stconvs2s_commit": core_commit(args.stconvs2s_root),
     }
     configuration = {key: str(value) if isinstance(value, Path) else value for key, value in configuration.items()}
+    if not args.auxiliary_target_source:
+        configuration["auxiliary_loss_weight"] = None
     configuration["world_size"] = world_size
     resume_state = None
     if args.resume:
@@ -754,9 +830,9 @@ def main() -> None:
             run_dir.mkdir(parents=True, exist_ok=False)
     if args.distributed:
         dist.barrier()
-    datasets = (
-        RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
+    train_dataset = RadarStationMemmapDataset(args.dataset_root, train_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="train",
+                                  auxiliary_target_source=args.auxiliary_target_source,
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
                                   input_stations=args.input_stations,
@@ -764,8 +840,8 @@ def main() -> None:
                                   require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
-                                  mapping_width_orig=args.mapping_width_orig),
-        RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.stride or args.step,
+                                  mapping_width_orig=args.mapping_width_orig)
+    val_dataset = RadarStationMemmapDataset(args.dataset_root, val_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="val",
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
@@ -774,8 +850,9 @@ def main() -> None:
                                   require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
-                                  mapping_width_orig=args.mapping_width_orig),
-        RadarStationMemmapDataset(args.dataset_root, test_years, stride=args.stride or args.step,
+                                  mapping_width_orig=args.mapping_width_orig)
+    test_dataset = None if args.skip_test else RadarStationMemmapDataset(
+                                  args.dataset_root, test_years, stride=args.stride or args.step,
                                   target_source=args.target_source, split_name="test",
                                   crop_stations=args.crop_stations,
                                   crop_margin_pixels=args.crop_margin_pixels,
@@ -784,14 +861,15 @@ def main() -> None:
                                   require_goes_availability=args.require_goes_availability,
                                   station_mapping=args.station_mapping,
                                   mapping_height_orig=args.mapping_height_orig,
-                                  mapping_width_orig=args.mapping_width_orig),
-    )
-    crop_metadata = datasets[0].crop_metadata
-    if any(dataset.crop_metadata != crop_metadata for dataset in datasets[1:]):
+                                  mapping_width_orig=args.mapping_width_orig)
+    datasets = (train_dataset, val_dataset, test_dataset)
+    loaded_datasets = (train_dataset, val_dataset) if test_dataset is None else datasets
+    crop_metadata = train_dataset.crop_metadata
+    if any(dataset.crop_metadata != crop_metadata for dataset in loaded_datasets[1:]):
         raise ValueError("O crop calculado difere entre os splits.")
     configuration["crop"] = crop_metadata
-    configuration["radar_capture_preprocessing"] = datasets[0].capture_preprocessing
-    configuration["goes_preprocessing"] = datasets[0].goes_preprocessing
+    configuration["radar_capture_preprocessing"] = train_dataset.capture_preprocessing
+    configuration["goes_preprocessing"] = train_dataset.goes_preprocessing
     if resume_state is not None:
         validate_resume_checkpoint(resume_state, configuration, world_size)
     if is_main(rank) and resume_state is None:
