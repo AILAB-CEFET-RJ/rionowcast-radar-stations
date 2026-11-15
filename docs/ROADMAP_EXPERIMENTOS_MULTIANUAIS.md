@@ -75,9 +75,14 @@ disco sem alterar a arquitetura STConvS2S.
 - [x] Implementar supervisão auxiliar WebSirene no treino, mantendo AlertaRio
   como target primário de validação e teste e normalizando cada loss por sua
   própria máscara.
-- [ ] Selecionar o peso da loss WebSirene exclusivamente em 2022 e executar
-  controle pareado mais três seeds no split cronológico 2012--2021 / 2022 /
-  2023--2024; avaliar somente contra AlertaRio.
+- [x] Selecionar o peso da loss WebSirene exclusivamente em 2022, sem consultar
+  2023--2024: `0,25`, `0,50` e `1,00` foram todos piores que o controle
+  AlertaRio na seed 1000. Registrar C6R como ablação negativa e não executar
+  seeds adicionais ou avaliação no teste para esta formulação.
+- [ ] Após definir o novo protocolo cronológico com 2025--2026, avaliar novas
+  hipóteses WebSirene sem reutilizar o teste histórico: ponderação por
+  distância ou concordância com AlertaRio, filtragem por confiabilidade/evento,
+  pré-treinamento seguido de ajuste fino AlertaRio e cabeça auxiliar separada.
 
 O protocolo, limiares iniciais e comandos estão documentados em
 [`CONTROLE_QUALIDADE_WEBSIRENE.md`](CONTROLE_QUALIDADE_WEBSIRENE.md). A rede

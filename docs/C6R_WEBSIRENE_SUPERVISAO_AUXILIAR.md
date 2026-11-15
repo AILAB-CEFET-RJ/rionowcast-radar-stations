@@ -92,6 +92,50 @@ em 2023--2024 somente uma vez. Em seguida, repita controle e candidata com as
 seeds 1001 e 1002 e exporte as previsoes para o mesmo avaliador pareado usado
 nos experimentos C3R, sempre contra os targets AlertaRio de 2023--2024.
 
+## Resultado da Selecao Inicial
+
+A selecao foi executada na seed 1000, com treino em 2012--2021 e validacao em
+2022. Todos os runs usaram `--skip-test`; portanto, os dados de 2023--2024 nao
+foram carregados nem consultados nesta decisao.
+
+| Configuracao | Peso WebSirene | Melhor epoca | `best_val_loss` |
+|---|---:|---:|---:|
+| Controle AlertaRio | -- | 20 | 0,002947 |
+| C6R auxiliar | 0,25 | 20 | 0,002969 |
+| C6R auxiliar | 0,50 | 10 | 0,002956 |
+| C6R auxiliar | 1,00 | 10 | 0,002967 |
+
+O melhor candidato auxiliar (peso 0,50) foi pior que o controle em 0,000009
+de `best_val_loss` (aproximadamente 0,3%). Apesar de pequeno, o efeito nao e
+favoravel em nenhuma das tres ponderacoes avaliadas. Assim, esta formulacao de
+supervisao auxiliar WebSirene e registrada como uma ablação negativa: nao
+executar seeds adicionais nem avaliar checkpoints em 2023--2024. O WebSirene
+permanece como fonte auditada para investigacoes futuras, mas nao integra o
+modelo de referencia atual.
+
+## Hipoteses Futuras
+
+O resultado negativo nao demonstra que o WebSirene seja inutil. Ele rejeita
+somente a loss auxiliar global, com peso fixo e normalizacao independente das
+mascaras. Possiveis formulacoes futuras, cada uma exigindo uma nova selecao
+cronologica sem consultar o teste, sao:
+
+- ponderar a loss WebSirene por distancia ate as estacoes AlertaRio ou pela
+  concordancia historica entre as redes, em vez de atribuir o mesmo peso a toda
+  celula WebSirene;
+- restringir a supervisao auxiliar a observacoes ou eventos que atendam um
+  criterio de confiabilidade previamente declarado, em especial eventos de
+  chuva de interesse operacional;
+- realizar pre-treinamento espacial com AlertaRio e WebSirene, seguido de
+  ajuste fino e selecao exclusivamente com AlertaRio;
+- investigar uma cabeca auxiliar separada para WebSirene, compartilhando o
+  encoder de radar, mas sem impor que a mesma cabeca de previsao explique as
+  duas redes.
+
+Essas alternativas nao devem ser comparadas retrospectivamente em 2023--2024.
+Devem ser definidas e selecionadas em uma validacao cronologica futura, de
+preferencia apos a versao auditada que incorporar 2025--2026.
+
 ## Interpretacao
 
 Aceite o WebSirene apenas se o ganho for reproduzivel entre seeds e sustentado
