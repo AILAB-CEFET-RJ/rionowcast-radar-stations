@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-frames-per-window", type=int, default=6)
     parser.add_argument("--capture-config", type=Path, required=True)
     parser.add_argument(
+        "--dataset-contract",
+        default="radar_sumare_audited_v3",
+        help="Identificador versionado registrado no metadata.json de cada ano.",
+    )
+    parser.add_argument(
         "--aggregation", choices=("rgb-max", "latest"), default="rgb-max",
         help="Agregação de imagem. rgb-max preserva a série legada, mas não é grandeza física.",
     )
@@ -184,6 +189,7 @@ def process_year(
     year: int, data_root: Path, output_root: Path, aggregate_minutes: int,
     height: int, width: int, min_frames_per_window: int, capture_config: dict,
     config_digest: str, aggregation: str, overwrite: bool, source_timezone: str | None = None,
+    dataset_contract: str = "radar_sumare_audited_v3",
 ) -> None:
     final_dir = output_root / f"year={year}"
     partial_dir = output_root / f"year={year}.partial"
@@ -238,7 +244,7 @@ def process_year(
                 writer.writerow({"timestamp": bucket.isoformat(), **row})
         expected_windows = sum(1 for _ in _calendar_buckets(year, aggregate_minutes))
         metadata = {
-            "dataset_contract": "radar_sumare_audited_v3",
+            "dataset_contract": dataset_contract,
             "year": year,
             "aggregate_minutes": aggregate_minutes,
             "aggregation_method": aggregation,
@@ -285,7 +291,8 @@ def main() -> None:
         if prepare_year_resume(args.output_root, year, args.resume, args.restart_partial):
             continue
         process_year(year, args.data_root, args.output_root, args.aggregate_minutes, args.height, args.width,
-                     args.min_frames_per_window, config, digest, args.aggregation, args.overwrite, source_timezone)
+                     args.min_frames_per_window, config, digest, args.aggregation, args.overwrite, source_timezone,
+                     args.dataset_contract)
 
 
 if __name__ == "__main__":

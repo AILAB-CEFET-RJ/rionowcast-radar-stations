@@ -111,7 +111,12 @@ class AuditedRadarMemmapTests(unittest.TestCase):
                 image[:, :, 3] = 255
                 Image.fromarray(image, mode="RGBA").save(raw / f"2024_01_01_00_{minute:02d}.png")
             output = root / "out"
-            process_year(2024, root / "raw", output, 15, 2, 2, 6, config, "digest", "rgb-max", False)
+            process_year(
+                2024, root / "raw", output, 15, 2, 2, 6, config, "digest", "rgb-max", False,
+                dataset_contract="radar_sumare_audited_v4",
+            )
+            metadata = json.loads((output / "year=2024" / "metadata.json").read_text())
+            self.assertEqual(metadata["dataset_contract"], "radar_sumare_audited_v4")
             year = output / "year=2024"
             timestamps = np.load(year / "radar_timestamps.npy", allow_pickle=False)
             self.assertEqual(timestamps.tolist(), ["2024-01-01T00:00:00", "2024-01-01T00:30:00"])
