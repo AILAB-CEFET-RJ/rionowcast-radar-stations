@@ -39,6 +39,17 @@ estações. O runner rejeita anos repetidos entre splits.
 
 ### Dataset
 
+- [x] Inventariar e extrair em raiz isolada os 22 arquivos mensais de radar de
+  2025--2026: 378.154 PNGs, hashes SHA-256 e manifesto de fonte V4.
+- [x] Inspecionar a geometria dos PNGs V4: todos os arquivos validos sao RGBA
+  `1024 x 768`; o produto nao e diretamente compativel com o bitmap historico
+  `656 x 654`.
+- [x] Validar o crop operacional `185:839, 56:712`, o mapeamento `direct` e
+  a convencao temporal de `-15` min contra 100 eventos AlertaRio em cada um
+  de 2025 e 2026. A correlacao de postos chuva--sinal local foi 0,597 e
+  0,682, respectivamente; em 2025, `-15` superou os controles `-30` e `0`.
+- [ ] Gerar e auditar a raiz V4 2012--2026 sem modificar V3; tratar 2026 como
+  periodo parcial, limitado pela intersecao entre radar e AlertaRio.
 - [x] Gerar `radar_frames.dat`, `radar_timestamps.npy` e `metadata.json` em
   `128 x 128` para 2012-2024, diretamente dos PNGs de radar.
 - [x] Converter os targets AlertaRio densos de cada ano para
