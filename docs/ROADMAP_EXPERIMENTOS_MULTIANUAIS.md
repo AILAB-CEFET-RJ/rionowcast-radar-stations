@@ -159,6 +159,22 @@ GOES-16 nos datasets históricos ou em checkpoints treinados somente com ele.
 - [ ] Registrar no log a distribuição efetivamente sorteada pelo sampler em
   cada época.
 
+### Atenção e controle de capacidade
+
+- [x] Implementar `A0-cap`, uma STConvS2S-C com bloco residual pontual
+  `C -> 2C -> C`, sem atenção, inserido depois do bloco espacial.
+- [x] Preservar a compatibilidade de checkpoints de `A0`, a inicialização
+  pareada dos parâmetros comuns e registrar a contagem de parâmetros do modelo.
+- [ ] Executar `A0` e `A0-cap` com seeds 1000--1002 no protocolo C3R, fazendo
+  a seleção em 2022 antes de consultar 2023--2024.
+- [ ] Congelar o orçamento e a posição do primeiro mecanismo de atenção e
+  manter sua diferença de parâmetros adicionais para `A0-cap` abaixo de 5%.
+- [ ] Implementar atenção temporal condicionada ao horizonte como correção
+  residual e compará-la com `A0` e `A0-cap`, incluindo custo e memória.
+
+O contrato, comandos e interpretação estão documentados em
+[`A0_CAPACITY_CONTROL.md`](A0_CAPACITY_CONTROL.md).
+
 ### Região Das Estações E Baselines
 
 O crop é derivado de `data/mapeamento_pixel_estacao_alertario.csv`, convertido

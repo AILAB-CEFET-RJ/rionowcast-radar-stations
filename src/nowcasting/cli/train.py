@@ -167,7 +167,7 @@ def parse_arguments() -> argparse.Namespace:
         "--auxiliary-loss-weight", type=float, default=1.0,
         help="Peso da loss mascarada da fonte auxiliar durante o treino.",
     )
-    parser.add_argument("--model", choices=("stconvs2s-c", "stconvs2s-r"),
+    parser.add_argument("--model", choices=("stconvs2s-c", "stconvs2s-c-cap", "stconvs2s-r"),
                         default="stconvs2s-c")
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--patience", type=int, default=16)
@@ -340,8 +340,20 @@ def model_class(core_root: Path, model_name: str):
     if not (core_root / "model" / "stconvs2s.py").is_file():
         raise FileNotFoundError(f"Não foi encontrado model/stconvs2s.py em {core_root}")
     sys.path.insert(0, str(core_root))
-    from model.stconvs2s import STConvS2S_C, STConvS2S_R
-    return {"stconvs2s-c": STConvS2S_C, "stconvs2s-r": STConvS2S_R}[model_name]
+    from model.stconvs2s import STConvS2S_C, STConvS2S_C_CapacityControl, STConvS2S_R
+    return {
+        "stconvs2s-c": STConvS2S_C,
+        "stconvs2s-c-cap": STConvS2S_C_CapacityControl,
+        "stconvs2s-r": STConvS2S_R,
+    }[model_name]
+
+
+def model_parameter_counts(model: torch.nn.Module) -> dict[str, int]:
+    """Return auditable total and trainable parameter counts."""
+    return {
+        "total": sum(parameter.numel() for parameter in model.parameters()),
+        "trainable": sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad),
+    }
 
 
 def criterion_from_args(args: argparse.Namespace, weights: tuple[float, ...]):
@@ -570,13 +582,30 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         )
 
     sample_x, sample_y, *_ = train_dataset[0]
-    model = build_forecaster(
-        model_type, sample_x, sample_y, num_layers=args.num_layers, hidden_dim=args.hidden_dim,
-        kernel_size=args.kernel_size, device=device, step=args.step,
-        forecast_formulation=args.forecast_formulation, input_stations=args.input_stations,
-        input_goes=args.input_goes,
-        conditional_goes_control=args.conditional_goes_control,
-    ).to(device)
+    # Keep model-specific parameter initialization from changing the paired
+    # data order or subsequent stochastic operations for a given seed.
+    rng_devices = (
+        [device.index if device.index is not None else torch.cuda.current_device()]
+        if device.type == "cuda" else []
+    )
+    with torch.random.fork_rng(devices=rng_devices):
+        model = build_forecaster(
+            model_type, sample_x, sample_y, num_layers=args.num_layers, hidden_dim=args.hidden_dim,
+            kernel_size=args.kernel_size, device=device, step=args.step,
+            forecast_formulation=args.forecast_formulation, input_stations=args.input_stations,
+            input_goes=args.input_goes,
+            conditional_goes_control=args.conditional_goes_control,
+        )
+    model = model.to(device)
+    parameter_counts = model_parameter_counts(model)
+    recorded_counts = configuration.setdefault("model_parameters", parameter_counts)
+    if recorded_counts != parameter_counts:
+        raise ValueError(
+            f"Contagem de parâmetros mudou entre iterações: {recorded_counts} != {parameter_counts}."
+        )
+    if is_main(rank) and iteration == 0 and resume_state is None:
+        with (run_dir / "configuration.json").open("w", encoding="utf-8") as file:
+            json.dump(configuration, file, indent=2)
     if args.distributed:
         model = DistributedDataParallel(model, device_ids=[device.index])
     criterion = criterion_from_args(args, weights)
@@ -588,6 +617,7 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         f"Input channels | radar=3 | goes={sample_x.shape[0] - 3 - (2 if args.input_stations else 0)} | stations={2 if args.input_stations else 0} | "
         f"total={sample_x.shape[0]} | formulation={args.forecast_formulation} | "
         f"STConvS2S channels={'radar=3, goes=' + str(sample_x.shape[0] - 5) if args.forecast_formulation == 'conditional-late-fusion' else sample_x.shape[0] - (2 if uses_persistence_baseline(args.forecast_formulation) else 0)}\n"
+        f"Model | parameters={parameter_counts['total']} | trainable={parameter_counts['trainable']}\n"
         f"DataLoader | workers={args.workers} | pin_memory={args.pin_memory} | "
         f"persistent_workers={args.persistent_workers} | "
         f"prefetch_factor={args.prefetch_factor if args.workers else 'n/a'}",
@@ -872,13 +902,14 @@ def main() -> None:
     configuration["goes_preprocessing"] = train_dataset.goes_preprocessing
     if resume_state is not None:
         validate_resume_checkpoint(resume_state, configuration, world_size)
-    if is_main(rank) and resume_state is None:
-        with (run_dir / "configuration.json").open("w", encoding="utf-8") as file:
-            json.dump(configuration, file, indent=2)
     results = [train_one_iteration(args, model_type, device, datasets, run_dir, index, weights, thresholds,
                                    configuration, resume_state, rank, world_size)
                for index in range(args.iterations)]
-    summary = {"iterations": len(results), "results": results}
+    summary = {
+        "iterations": len(results),
+        "model_parameters": configuration.get("model_parameters"),
+        "results": results,
+    }
     if is_main(rank):
         with (run_dir / "summary.json").open("w", encoding="utf-8") as file:
             json.dump(summary, file, indent=2)
