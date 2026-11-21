@@ -9,6 +9,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from nowcasting.target_eligibility import (
+    filter_starts_with_complete_output_coverage,
+    observed_frame_mask,
+    requires_observation_in_each_output_frame,
+)
+
 
 TARGET_METADATA_FILES = {
     "websirene": "targets_websirene_metadata.json",
@@ -309,6 +315,19 @@ class RadarStationMemmapDataset(Dataset):
             discarded = before_goes - len(candidate_starts)
             if discarded:
                 print(f"[{self.split_name}] Ano {year} | descartadas {discarded} amostras sem GOES causal em toda a entrada", flush=True)
+        if requires_observation_in_each_output_frame(target_metadata):
+            before_target_coverage = len(candidate_starts)
+            observed_frames = self._target_observed_frames(target, radar_shape[0])
+            candidate_starts = filter_starts_with_complete_output_coverage(
+                candidate_starts, observed_frames, t_in=self.t_in, t_out=self.t_out,
+            )
+            discarded = before_target_coverage - len(candidate_starts)
+            if discarded:
+                print(
+                    f"[{self.split_name}] Ano {year} | descartadas {discarded} amostras "
+                    "sem observação do target em todos os horizontes",
+                    flush=True,
+                )
         self.samples.extend((year, start) for start in candidate_starts)
         print(
             f"[{self.split_name}] Ano {year} carregado | fonte={self.target_source} | "
@@ -342,6 +361,22 @@ class RadarStationMemmapDataset(Dataset):
             "targets": np.memmap(year_dir / metadata["Y_file"], dtype=np.dtype(metadata["Y_dtype"]), mode="r", shape=shape),
             "masks": np.memmap(year_dir / metadata["M_file"], dtype=np.dtype(metadata["M_dtype"]), mode="r", shape=shape),
         }
+
+    @staticmethod
+    def _target_observed_frames(
+        target: dict[str, np.ndarray | np.memmap | dict[str, np.ndarray]], frame_count: int,
+    ) -> np.ndarray:
+        if "sparse" in target:
+            return observed_frame_mask(target["sparse"]["frame"], frame_count)
+        masks = target["masks"]
+        observed = np.zeros(frame_count, dtype=bool)
+        chunk_size = 1024
+        for start in range(0, frame_count, chunk_size):
+            stop = min(frame_count, start + chunk_size)
+            observed[start:stop] = np.any(
+                np.asarray(masks[start:stop]), axis=(1, 2, 3)
+            )
+        return observed
 
     def _sparse_targets_to_dense(
         self, target: dict[str, np.ndarray | np.memmap | dict[str, np.ndarray]], start: int, end: int,

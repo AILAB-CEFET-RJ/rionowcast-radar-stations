@@ -85,6 +85,23 @@ def create_auxiliary_sparse_target(root: Path, year: int) -> None:
         )
 
 
+def enable_complete_output_coverage_policy(root: Path, year: int) -> None:
+    year_dir = root / f"year={year}"
+    np.savez(
+        year_dir / "targets_alertario_sparse.npz",
+        frame=np.array([1, 2, 3, 5], dtype=np.int32),
+        row=np.array([0, 0, 1, 0], dtype=np.uint16),
+        column=np.array([0, 0, 1, 0], dtype=np.uint16),
+        value=np.log1p(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)),
+    )
+    metadata_path = year_dir / "targets_alertario_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["sample_eligibility"] = {
+        "require_observation_in_each_output_frame": True,
+    }
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
 def create_goes_year(root: Path, year: int, available: list[bool] | None = None) -> None:
     year_dir = root / f"year={year}"
     radar_timestamps = np.array(
@@ -259,6 +276,43 @@ class NowcastingDatasetTests(unittest.TestCase):
             self.assertEqual(tuple(target.shape), (5, 2))
             self.assertEqual(int(mask.sum()), 2)
             self.assertEqual(tuple(output.shape), (1, 5, 2))
+
+    def test_new_metadata_requires_an_observation_in_every_output_frame(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            enable_complete_output_coverage_policy(root, 2020)
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n2,1,1\n", encoding="utf-8")
+
+            grid_dataset = RadarStationMemmapDataset(
+                root, [2020], t_in=2, t_out=2, stride=1,
+            )
+            station_dataset = StationSequenceDataset(
+                root, [2020], mapping=mapping, t_in=2, t_out=2, stride=1,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+
+            self.assertEqual(grid_dataset.samples, [(2020, 0)])
+            self.assertEqual(station_dataset.samples, [(2020, 0)])
+
+    def test_old_metadata_preserves_partially_observed_output_windows(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            create_sparse_year(root, 2020)
+            mapping = root / "stations.csv"
+            mapping.write_text("station_id,pixel_i,pixel_j\n1,0,0\n2,1,1\n", encoding="utf-8")
+
+            grid_dataset = RadarStationMemmapDataset(
+                root, [2020], t_in=2, t_out=2, stride=1,
+            )
+            station_dataset = StationSequenceDataset(
+                root, [2020], mapping=mapping, t_in=2, t_out=2, stride=1,
+                mapping_height_orig=2, mapping_width_orig=2,
+            )
+
+            self.assertEqual(len(grid_dataset), 9)
+            self.assertEqual(len(station_dataset), 9)
 
     def test_station_sequence_dataset_rejects_samples_crossing_radar_gaps(self):
         with tempfile.TemporaryDirectory() as temporary_dir:

@@ -13,7 +13,7 @@ from nowcasting.cli.build_alertario_sparse_targets import load_mapping, process_
 
 
 class AlertarioSparseTargetTests(unittest.TestCase):
-    def test_builder_preserves_station_id_and_excludes_sentinel_values(self) -> None:
+    def test_builder_preserves_station_id_and_excludes_invalid_station_windows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             raw_root = root / "raw"
@@ -30,14 +30,16 @@ class AlertarioSparseTargetTests(unittest.TestCase):
             raw_path = raw_root / "source.parquet"
             pd.DataFrame(
                 {
-                    "estacao_id": [1, 1, 1, 2],
+                    "estacao_id": [1, 1, 1, 2, 2, 2],
                     "dia_utc": [
                         "2024-01-01T00:00:00Z",
                         "2024-01-01T00:15:00Z",
                         "2024-01-01T00:30:00Z",
                         "2024-01-01T00:00:00Z",
+                        "2024-01-01T00:15:00Z",
+                        "2024-01-01T00:20:00Z",
                     ],
-                    "m15": [2.0, -99.99, -1.0, 3.0],
+                    "m15": [2.0, -99.99, -1.0, 3.0, 4.0, 101.0],
                 }
             ).to_parquet(raw_path, index=False)
             np.save(
@@ -51,7 +53,7 @@ class AlertarioSparseTargetTests(unittest.TestCase):
             args = Namespace(
                 mapping=mapping_path, height=128, width=128, height_orig=656,
                 width_orig=654, radar_root=radar_root, output_root=output_root,
-                overwrite=False,
+                observation_to_radar_offset_minutes=0, max_m15_mm=100.0, overwrite=False,
             )
             process_year(args, 2024, load_mapping(args), [raw_path])
 
@@ -65,6 +67,30 @@ class AlertarioSparseTargetTests(unittest.TestCase):
             self.assertTrue(metadata["station_provenance"])
             self.assertEqual(metadata["quality_control_counts"]["sentinel_m15"], 1)
             self.assertEqual(metadata["quality_control_counts"]["negative_m15"], 2)
+            self.assertEqual(metadata["quality_control_counts"]["above_max_m15"], 1)
+            self.assertEqual(
+                metadata["quality_control_counts"]["station_windows_excluded_above_max_m15"], 1,
+            )
+            self.assertEqual(
+                metadata["quality_control_counts"]
+                ["station_windows_with_valid_values_discarded_above_max_m15"],
+                1,
+            )
+            self.assertEqual(metadata["quality_control_parameters"]["max_m15_mm"], 100.0)
+            self.assertEqual(
+                metadata["quality_control_parameters"]["above_max_action"],
+                "exclude_station_window_as_missing",
+            )
+            self.assertEqual(
+                metadata["sample_eligibility"],
+                {"require_observation_in_each_output_frame": True},
+            )
+            self.assertEqual(metadata["observation_coverage"]["observed_frame_count"], 1)
+            self.assertEqual(metadata["observation_coverage"]["first_observed_frame"], 0)
+            self.assertEqual(metadata["observation_coverage"]["last_observed_frame"], 0)
+            self.assertEqual(
+                metadata["observation_coverage"]["trailing_radar_frames_without_observation"], 2,
+            )
 
 
 if __name__ == "__main__":

@@ -35,6 +35,18 @@ treino, validação e teste.
 Os anos devem ser revisados após uma auditoria de cobertura de radar e de
 estações. O runner rejeita anos repetidos entre splits.
 
+## Protocolo V4
+
+| Split | Anos | Uso |
+|---|---|---|
+| Treino | 2012--2022 | Otimizacao dos parametros |
+| Validacao | 2023--2024 | Early stopping e escolha de hiperparametros |
+| Teste | 2025--26/06/2026 | Avaliacao final continua, com duas estacoes chuvosas |
+
+O resultado principal do teste combina 2025 e a parte observada de 2026. Os
+dois periodos tambem devem ser reportados separadamente como diagnostico da
+composicao sazonal, sem reutilizar o teste para decisoes de modelagem.
+
 ## Etapas
 
 ### Dataset
@@ -48,8 +60,9 @@ estações. O runner rejeita anos repetidos entre splits.
   a convencao temporal de `-15` min contra 100 eventos AlertaRio em cada um
   de 2025 e 2026. A correlacao de postos chuva--sinal local foi 0,597 e
   0,682, respectivamente; em 2025, `-15` superou os controles `-30` e `0`.
-- [ ] Gerar e auditar a raiz V4 2012--2026 sem modificar V3; tratar 2026 como
-  periodo parcial, limitado pela intersecao entre radar e AlertaRio.
+- [x] Gerar e auditar a raiz V4 2012--2026 sem modificar V3; 2025 possui
+  4.540 sequencias elegiveis e 2026 parcial possui 2.847, limitado pela
+  intersecao entre radar e AlertaRio e sem admitir horizontes sem target.
 - [x] Gerar `radar_frames.dat`, `radar_timestamps.npy` e `metadata.json` em
   `128 x 128` para 2012-2024, diretamente dos PNGs de radar.
 - [x] Converter os targets AlertaRio densos de cada ano para
