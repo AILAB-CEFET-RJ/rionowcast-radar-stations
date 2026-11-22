@@ -165,15 +165,23 @@ GOES-16 nos datasets históricos ou em checkpoints treinados somente com ele.
   `C -> 2C -> C`, sem atenção, inserido depois do bloco espacial.
 - [x] Preservar a compatibilidade de checkpoints de `A0`, a inicialização
   pareada dos parâmetros comuns e registrar a contagem de parâmetros do modelo.
-- [ ] Executar `A0` e `A0-cap` com seeds 1000--1002 no protocolo C3R, fazendo
+- [x] Executar `A0` e `A0-cap` com seeds 1000--1002 no protocolo C3R, fazendo
   a seleção em 2022 antes de consultar 2023--2024.
-- [ ] Congelar o orçamento e a posição do primeiro mecanismo de atenção e
+- [x] Congelar o orçamento e a posição do primeiro mecanismo de atenção e
   manter sua diferença de parâmetros adicionais para `A0-cap` abaixo de 5%.
-- [ ] Implementar atenção temporal condicionada ao horizonte como correção
-  residual e compará-la com `A0` e `A0-cap`, incluindo custo e memória.
+- [x] Implementar atenção temporal condicionada ao horizonte como correção
+  residual com orçamento comparável a `A0-cap`.
+- [ ] Executar `A1-attn` com seeds 1000--1002, comparar com `A0` e `A0-cap`
+  incluindo custo e memória, e selecionar em 2022 antes de decidir se a
+  arquitetura merece avaliação em 2023--2024.
+
+Na seleção de 2022, `A0-cap` venceu A0 em apenas uma das três seeds. As losses
+médias foram 0,002947 para A0 e 0,002937 para A0-cap; a pequena diferença foi
+conduzida pela seed 1002 e não constitui ganho robusto de capacidade.
 
 O contrato, comandos e interpretação estão documentados em
-[`A0_CAPACITY_CONTROL.md`](A0_CAPACITY_CONTROL.md).
+[`A0_CAPACITY_CONTROL.md`](A0_CAPACITY_CONTROL.md) e
+[`A1_TEMPORAL_ATTENTION.md`](A1_TEMPORAL_ATTENTION.md).
 
 ### Região Das Estações E Baselines
 

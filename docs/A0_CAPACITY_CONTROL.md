@@ -108,6 +108,19 @@ Primeiro compare `best_val_loss` em 2022. Depois de fixar a arquitetura e o
 protocolo de avaliação, exporte os checkpoints para os registros canônicos de
 2023--2024 e compare métricas contínuas, por horizonte, intensidade e evento.
 
+## Resultado da seleção em 2022
+
+| Seed | A0 | A0-cap | Melhor variante |
+|---:|---:|---:|---|
+| 1000 | 0,002935 | 0,002942 | A0 |
+| 1001 | 0,002946 | 0,002957 | A0 |
+| 1002 | 0,002959 | 0,002911 | A0-cap |
+| Média | 0,002947 | 0,002937 | A0-cap |
+
+A0-cap venceu somente uma das três seeds. A pequena melhora média, cerca de
+0,34%, foi conduzida pela seed 1002 e não demonstra ganho robusto causado pelo
+aumento de capacidade. O teste de 2023--2024 não foi consultado.
+
 ## Critério de interpretação
 
 - atenção futura melhor que `A0-cap`: evidência de agregação adaptativa útil;

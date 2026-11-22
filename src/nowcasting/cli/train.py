@@ -167,8 +167,11 @@ def parse_arguments() -> argparse.Namespace:
         "--auxiliary-loss-weight", type=float, default=1.0,
         help="Peso da loss mascarada da fonte auxiliar durante o treino.",
     )
-    parser.add_argument("--model", choices=("stconvs2s-c", "stconvs2s-c-cap", "stconvs2s-r"),
-                        default="stconvs2s-c")
+    parser.add_argument(
+        "--model",
+        choices=("stconvs2s-c", "stconvs2s-c-cap", "stconvs2s-c-attn", "stconvs2s-r"),
+        default="stconvs2s-c",
+    )
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--patience", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=2)
@@ -340,10 +343,16 @@ def model_class(core_root: Path, model_name: str):
     if not (core_root / "model" / "stconvs2s.py").is_file():
         raise FileNotFoundError(f"Não foi encontrado model/stconvs2s.py em {core_root}")
     sys.path.insert(0, str(core_root))
-    from model.stconvs2s import STConvS2S_C, STConvS2S_C_CapacityControl, STConvS2S_R
+    from model.stconvs2s import (
+        STConvS2S_C,
+        STConvS2S_C_CapacityControl,
+        STConvS2S_C_TemporalAttention,
+        STConvS2S_R,
+    )
     return {
         "stconvs2s-c": STConvS2S_C,
         "stconvs2s-c-cap": STConvS2S_C_CapacityControl,
+        "stconvs2s-c-attn": STConvS2S_C_TemporalAttention,
         "stconvs2s-r": STConvS2S_R,
     }[model_name]
 
@@ -610,6 +619,8 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
         model = DistributedDataParallel(model, device_ids=[device.index])
     criterion = criterion_from_args(args, weights)
     optimizer = torch.optim.RMSprop(model.parameters(), lr=args.learning_rate, alpha=0.9, eps=1e-6)
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     if is_main(rank): print(
         f"Training batches | microbatch={args.batch_size} | "
         f"accumulation={args.gradient_accumulation_steps} | "
@@ -785,16 +796,35 @@ def train_one_iteration(args, model_type, device, datasets, run_dir: Path, itera
                               station_locations=locations,
                               residual_persistence=uses_persistence_baseline(args.forecast_formulation))
     elapsed = time.monotonic() - started
+    peak_cuda_allocated = (
+        torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None
+    )
+    peak_cuda_reserved = (
+        torch.cuda.max_memory_reserved(device) if device.type == "cuda" else None
+    )
     result = {"seed": seed, "best_epoch": best_epoch, "best_val_loss": best_val,
               "elapsed_seconds": elapsed, "checkpoint": best_checkpoint_path.name,
+              "peak_cuda_memory_allocated_bytes": peak_cuda_allocated,
+              "peak_cuda_memory_reserved_bytes": peak_cuda_reserved,
               "test_metrics": metrics, "history": history}
     if is_main(rank):
         with (run_dir / f"iteration_{iteration + 1}.json").open("w", encoding="utf-8") as file:
             json.dump(result, file, indent=2)
+        memory_message = (
+            f" | peak_cuda_allocated={peak_cuda_allocated / 2**20:.1f} MiB"
+            f" | peak_cuda_reserved={peak_cuda_reserved / 2**20:.1f} MiB"
+            if peak_cuda_allocated is not None else ""
+        )
         if metrics is None:
-            print(f"Iteration {iteration + 1} complete | test=skipped", flush=True)
+            print(
+                f"Iteration {iteration + 1} complete | test=skipped{memory_message}",
+                flush=True,
+            )
         else:
-            print(f"Iteration {iteration + 1} complete | test={metrics['global']}", flush=True)
+            print(
+                f"Iteration {iteration + 1} complete | test={metrics['global']}"
+                f"{memory_message}", flush=True,
+            )
     return result
 
 
