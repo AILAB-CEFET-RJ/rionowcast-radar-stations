@@ -63,6 +63,13 @@ composicao sazonal, sem reutilizar o teste para decisoes de modelagem.
 - [x] Gerar e auditar a raiz V4 2012--2026 sem modificar V3; 2025 possui
   4.540 sequencias elegiveis e 2026 parcial possui 2.847, limitado pela
   intersecao entre radar e AlertaRio e sem admitir horizontes sem target.
+- [x] Implementar e executar em 2026 a auditoria temporal diagnostica de
+  `m05`, `m10`, `m15` e `h01`: 93 timestamps foram agrupados em 18 sequencias,
+  sem alterar automaticamente os targets.
+- [x] Enriquecer os 93 candidatos com vizinhos AlertaRio, eco RGB e suporte
+  WebSirene assimetrico: 22 passaram pela triagem espacial, 15 ficaram sem
+  suporte multissensor e 5 de 12 episodios de revisao receberam prioridade
+  alta; nenhuma observacao foi excluida automaticamente.
 - [x] Gerar `radar_frames.dat`, `radar_timestamps.npy` e `metadata.json` em
   `128 x 128` para 2012-2024, diretamente dos PNGs de radar.
 - [x] Converter os targets AlertaRio densos de cada ano para
