@@ -10,6 +10,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from nowcasting.target_eligibility import (
+    filter_starts_with_complete_output_coverage,
+    requires_observation_in_each_output_frame,
+)
+
 
 def load_station_pixels(
     mapping_path: str | Path, height: int, width: int, *, height_orig: int = 656, width_orig: int = 654,
@@ -163,6 +168,18 @@ class StationSequenceDataset(Dataset):
                 )
         else:
             candidate_starts = list(candidate_starts)
+        if requires_observation_in_each_output_frame(target_metadata):
+            before_target_coverage = len(candidate_starts)
+            candidate_starts = filter_starts_with_complete_output_coverage(
+                candidate_starts, masks.any(axis=1), t_in=self.t_in, t_out=self.t_out,
+            )
+            discarded = before_target_coverage - len(candidate_starts)
+            if discarded:
+                print(
+                    f"[{self.split_name}] Ano {year} | descartadas {discarded} amostras "
+                    "sem observação do target em todos os horizontes",
+                    flush=True,
+                )
         self.samples.extend((year, start) for start in candidate_starts)
         print(
             f"[{self.split_name}] Ano {year} carregado | estações={len(self.station_ids)} | "

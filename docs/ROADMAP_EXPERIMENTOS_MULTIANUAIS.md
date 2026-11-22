@@ -35,10 +35,41 @@ treino, validação e teste.
 Os anos devem ser revisados após uma auditoria de cobertura de radar e de
 estações. O runner rejeita anos repetidos entre splits.
 
+## Protocolo V4
+
+| Split | Anos | Uso |
+|---|---|---|
+| Treino | 2012--2022 | Otimizacao dos parametros |
+| Validacao | 2023--2024 | Early stopping e escolha de hiperparametros |
+| Teste | 2025--26/06/2026 | Avaliacao final continua, com duas estacoes chuvosas |
+
+O resultado principal do teste combina 2025 e a parte observada de 2026. Os
+dois periodos tambem devem ser reportados separadamente como diagnostico da
+composicao sazonal, sem reutilizar o teste para decisoes de modelagem.
+
 ## Etapas
 
 ### Dataset
 
+- [x] Inventariar e extrair em raiz isolada os 22 arquivos mensais de radar de
+  2025--2026: 378.154 PNGs, hashes SHA-256 e manifesto de fonte V4.
+- [x] Inspecionar a geometria dos PNGs V4: todos os arquivos validos sao RGBA
+  `1024 x 768`; o produto nao e diretamente compativel com o bitmap historico
+  `656 x 654`.
+- [x] Validar o crop operacional `185:839, 56:712`, o mapeamento `direct` e
+  a convencao temporal de `-15` min contra 100 eventos AlertaRio em cada um
+  de 2025 e 2026. A correlacao de postos chuva--sinal local foi 0,597 e
+  0,682, respectivamente; em 2025, `-15` superou os controles `-30` e `0`.
+- [x] Gerar e auditar a raiz V4 2012--2026 sem modificar V3; 2025 possui
+  4.540 sequencias elegiveis e 2026 parcial possui 2.847, limitado pela
+  intersecao entre radar e AlertaRio e sem admitir horizontes sem target.
+- [x] Implementar e executar em 2026 a auditoria temporal diagnostica de
+  `m05`, `m10`, `m15` e `h01`: 93 timestamps foram agrupados em 18 sequencias,
+  sem alterar automaticamente os targets.
+- [x] Enriquecer os 93 candidatos com vizinhos AlertaRio, eco RGB e suporte
+  WebSirene assimetrico: 22 passaram pela triagem espacial, 15 ficaram sem
+  suporte multissensor e 5 de 12 episodios de revisao receberam prioridade
+  alta; nenhuma observacao foi excluida automaticamente.
 - [x] Gerar `radar_frames.dat`, `radar_timestamps.npy` e `metadata.json` em
   `128 x 128` para 2012-2024, diretamente dos PNGs de radar.
 - [x] Converter os targets AlertaRio densos de cada ano para

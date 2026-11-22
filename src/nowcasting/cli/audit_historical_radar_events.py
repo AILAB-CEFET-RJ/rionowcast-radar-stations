@@ -15,7 +15,11 @@ from nowcasting.cli.audit_historical_station_mapping import (
     aggregate_bucket,
     load_observations,
 )
-from nowcasting.cli.build_radar_memmaps import build_time_buckets, collect_files_for_year
+from nowcasting.cli.build_radar_memmaps import (
+    build_time_buckets,
+    collect_files_for_year,
+    collect_files_for_utc_year,
+)
 from nowcasting.radar_capture import load_capture_config
 
 
@@ -65,7 +69,11 @@ def parse_args() -> argparse.Namespace:
 
 def audit_year(args: argparse.Namespace, config: dict, mapping: pd.DataFrame, year: int) -> tuple[list[dict], dict]:
     observations = load_observations(args.alertario_root, mapping, year)
-    items, _ = collect_files_for_year(args.data_root, year)
+    source_timezone = config.get("temporal_alignment", {}).get("png_filename_timezone")
+    if source_timezone:
+        items, _ = collect_files_for_utc_year(args.data_root, year, source_timezone)
+    else:
+        items, _ = collect_files_for_year(args.data_root, year)
     buckets = build_time_buckets(items, args.aggregate_minutes)
     maxima = observations.groupby("timestamp", as_index=False)["m15"].max().sort_values("m15", ascending=False)
     selected: list[tuple[object, object]] = []

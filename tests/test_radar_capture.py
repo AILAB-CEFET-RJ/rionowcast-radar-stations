@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from nowcasting.radar_capture import load_capture_config, load_reflectivity_rgb
+from nowcasting.radar_capture import load_capture_config, load_reflectivity_rgb, reflectivity_shape
 
 
 class RadarCaptureTests(unittest.TestCase):
@@ -42,6 +42,18 @@ class RadarCaptureTests(unittest.TestCase):
             self.assertEqual(result.shape, (4, 4, 3))
             self.assertTrue(np.all(result[:, :, 0] == 0))
             self.assertTrue(np.all(result[:, :, 1] == 150))
+
+    def test_reflectivity_shape_uses_crop_not_source_geometry(self) -> None:
+        config = {
+            "source_image": {"width": 1024, "height": 768},
+            "reflectivity_crop": {
+                "left": 185,
+                "top": 56,
+                "right_exclusive": 839,
+                "bottom_exclusive": 712,
+            },
+        }
+        self.assertEqual(reflectivity_shape(config), (656, 654))
 
     def test_config_rejects_crop_outside_source_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

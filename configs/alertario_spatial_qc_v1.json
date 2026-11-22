@@ -1,0 +1,33 @@
+{
+  "version": "v1",
+  "status": "diagnostic_only",
+  "wet_threshold_mm15": 1.25,
+  "spatial_screening_threshold_mm15": 6.25,
+  "temporal_tolerance_minutes": 15,
+  "candidate_cadence_minutes": 5,
+  "review_episode_gap_minutes": 60,
+  "alertario_neighbors": {
+    "local_radius_km": 5.0,
+    "extended_radius_km": 10.0,
+    "minimum_available_neighbors": 2
+  },
+  "radar": {
+    "observation_timestamp_floor_minutes": 15,
+    "observation_to_radar_offset_minutes": -15,
+    "source_height": 656,
+    "source_width": 654,
+    "patch_radii_pixels": [1, 2],
+    "active_channel_threshold": 0,
+    "minimum_active_pixels": 1,
+    "interpretation": "visual_echo_support_only_not_quantitative_reflectivity"
+  },
+  "websirene": {
+    "local_radius_km": 5.0,
+    "extended_radius_km": 10.0,
+    "minimum_wet_stations_for_consensus": 2,
+    "accepted_observations_only": true,
+    "absence_is_negative_evidence": false,
+    "may_determine_rejection_alone": false
+  },
+  "automatic_exclusion": false
+}

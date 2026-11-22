@@ -12,8 +12,16 @@ import numpy as np
 import pandas as pd
 
 from nowcasting.cli.audit_capture_mapping import render_overlay
-from nowcasting.cli.build_radar_memmaps import build_time_buckets, collect_files_for_year
-from nowcasting.radar_capture import load_capture_config, load_reflectivity_rgb
+from nowcasting.cli.build_radar_memmaps import (
+    build_time_buckets,
+    collect_files_for_year,
+    collect_files_for_utc_year,
+)
+from nowcasting.radar_capture import (
+    load_capture_config,
+    load_reflectivity_rgb,
+    reflectivity_shape,
+)
 from nowcasting.radar_georeferencing import geographic_station_pixels, orientation_candidates, require_pixels_in_bounds
 
 
@@ -141,11 +149,14 @@ def main() -> None:
     if not required.issubset(mapping.columns):
         raise ValueError(f"{args.mapping}: colunas exigidas: {sorted(required)}")
     mapping["station_id"] = mapping["station_id"].astype(int)
-    source = config["source_image"]
-    height, width = int(source["height"]), int(source["width"])
+    height, width = reflectivity_shape(config)
     candidates = all_candidate_pixels(mapping, height, width, config)
     observations = load_observations(args.alertario_root, mapping, args.year)
-    items, _ = collect_files_for_year(args.data_root, args.year)
+    source_timezone = config.get("temporal_alignment", {}).get("png_filename_timezone")
+    if source_timezone:
+        items, _ = collect_files_for_utc_year(args.data_root, args.year, source_timezone)
+    else:
+        items, _ = collect_files_for_year(args.data_root, args.year)
     buckets = build_time_buckets(items, args.aggregate_minutes)
     event_maxima = observations.groupby("timestamp", as_index=False)["m15"].max().sort_values("m15", ascending=False)
     selected: list[tuple[object, object]] = []
@@ -189,7 +200,10 @@ def main() -> None:
         report.to_csv(args.output_dir / f"mapping_{name}.csv", index=False)
         render_overlay(strongest_frame, mapping, rows, columns, show_labels=False).save(args.output_dir / f"overlay_{name}.png")
     summary = {
-        "year": args.year, "source_shape": [height, width], "legacy_mapping_shape": [656, 654],
+        "year": args.year,
+        "reflectivity_shape": [height, width],
+        "legacy_mapping_shape": [656, 654],
+        "timestamp_convention": "utc" if source_timezone else "source_filename_naive",
         "events": event_rows, "candidate_scores": scores,
         "recommended_candidate": scores[0]["candidate"],
         "recommendation_status": "requires_temporal_offset_holdout_and_meteorological_review",

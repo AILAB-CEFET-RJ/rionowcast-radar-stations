@@ -1,0 +1,41 @@
+{
+  "name": "radar_sumare_2025_2026_capture_candidate",
+  "version": 1,
+  "status": "validated_for_v4_memmap_build",
+  "source_image": {
+    "width": 1024,
+    "height": 768,
+    "mode": "RGBA"
+  },
+  "reflectivity_crop": {
+    "left": 185,
+    "top": 56,
+    "right_exclusive": 839,
+    "bottom_exclusive": 712
+  },
+  "capture_geometry": {
+    "cropped_width": 654,
+    "cropped_height": 656,
+    "rationale": "O crop e o candidato operacional V1 previamente auditado. A inspeção independente de 378154 PNGs de 2025--2026 confirmou tamanho 1024x768 e modo RGBA uniformes. A validacao com 100 eventos AlertaRio por ano selecionou a orientacao direct, com correlacao de postos 0,597 em 2025 e 0,682 em 2026."
+  },
+  "temporal_alignment": {
+    "png_filename_timezone": "America/Sao_Paulo",
+    "png_timestamp_convention": "candidate local wall-clock time at 2-minute capture",
+    "radar_window_timestamp_convention": "UTC start of 15-minute aggregation",
+    "alertario_m15_timestamp_convention": "UTC end of 15-minute accumulation",
+    "alertario_m15_to_radar_window_offset_minutes": -15,
+    "status": "validated_against_alertario_2025_2026",
+    "validation": {
+      "years": [2025, 2026],
+      "tested_offsets_minutes": [-30, -15, 0],
+      "selected_offset_minutes": -15,
+      "selection_rationale": "Em 2025, -15 min obteve a maior correlacao de postos entre chuva e sinal local de radar (0,597; -30=0,471; 0=0,541)."
+    }
+  },
+  "station_mapping_transform": {
+    "status": "validated_against_alertario_2025_2026",
+    "method": "reuse configs/mapeamento_pixel_estacao_alertario_historical_v1.csv only for audit",
+    "rationale": "O bitmap recortado tem 656 linhas por 654 colunas, compativel com a geometria usada pelo mapeamento historico. Em auditorias independentes de 100 eventos por ano, a orientacao direct liderou as alternativas em 2025 e 2026."
+  },
+  "description": "Contrato candidato para os PNGs operacionais 1024x768 recebidos em 2025--2026. Nao substitui o contrato historico auditavel V1."
+}

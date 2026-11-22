@@ -48,6 +48,12 @@ def crop_bounds(config: dict[str, Any]) -> tuple[int, int, int, int]:
     )
 
 
+def reflectivity_shape(config: dict[str, Any]) -> tuple[int, int]:
+    """Return the height and width of the reflectivity bitmap after cropping."""
+    left, top, right, bottom = crop_bounds(config)
+    return bottom - top, right - left
+
+
 def load_reflectivity_rgb(
     path: Path,
     capture_config: dict[str, Any] | None = None,
